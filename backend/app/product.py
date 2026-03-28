@@ -1,0 +1,37 @@
+from __future__ import annotations
+
+from typing import Dict, Optional
+
+from app.schemas.pipeline import ProductData
+
+
+def model_to_dict(model: object) -> Dict[str, object]:
+    if hasattr(model, "model_dump"):
+        return getattr(model, "model_dump")()
+    return getattr(model, "dict")()
+
+
+def merge_product_data(primary: ProductData, secondary: Optional[ProductData]) -> ProductData:
+    if secondary is None:
+        return primary
+
+    merged_payload: Dict[str, object] = model_to_dict(primary)
+    secondary_payload = model_to_dict(secondary)
+
+    for field_name, value in secondary_payload.items():
+        current = merged_payload.get(field_name)
+        if field_name == "nutriments":
+            merged_nutriments = dict(value or {})
+            merged_nutriments.update(current or {})
+            merged_payload[field_name] = merged_nutriments
+            continue
+        if field_name in {"labels_tags", "categories_tags"}:
+            merged_payload[field_name] = sorted(set((current or []) + (value or [])))
+            continue
+        if not current and value:
+            merged_payload[field_name] = value
+
+    if primary.source != secondary.source and secondary.source != "unknown":
+        merged_payload["source"] = "hybrid"
+    merged_payload["confidence"] = round(max(primary.confidence, secondary.confidence), 3)
+    return ProductData(**merged_payload)
