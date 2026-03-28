@@ -12,6 +12,7 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
 - Embedding-assisted candidate comparison and AI reranking for similar-product suggestions
 - Deterministic impact translation with explicit emissions deltas for frontend consumption
 - Minimal FastAPI endpoints for health, run, and reindex
+- Dedicated alternatives endpoint with preference-aware candidate fallback
 - Step-by-step trace with `trace_id`, structured step logs, and degraded-step warnings
 - Uniform API error envelopes: `error_code`, `message`, `details`, `trace_id`
 - Configurable per-service retries, timeouts, request limits, and local path allowlists
@@ -66,6 +67,8 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
   - gathers candidate products from the local OFF subset and OFF search when available
   - filters candidates deterministically for category, ingredient, format, and quantity similarity
   - reranks the shortlist with the LLM while keeping a deterministic fallback
+- `POST /alternatives/from-barcode` wraps the pipeline result and evaluates the candidate shortlist against user preferences supplied as inline markdown.
+- If no candidate matches the stated preferences, the endpoint still returns up to 3 strong candidates with `requires_disclaimer=true` so the frontend can show a disclaimer instead of hiding the options.
 - When a better alternative is found, the pipeline also returns `impact_comparison` with:
   - explicit emissions values for the base product and the selected alternative
   - `co2e_delta_kg_per_kg`
@@ -118,6 +121,8 @@ pytest backend/tests/test_openfoodfacts_client.py backend/tests/test_normalizer.
   - Check embeddings availability and `SIMILAR_PRODUCTS_SIMILARITY_THRESHOLD`.
 - Missing `impact_comparison`:
   - This usually means no better similar candidate was found, or the candidate lacks enough emissions data for a strong comparison.
+- `requires_disclaimer=true` in alternatives:
+  - No candidate satisfied the current preference checks, so the backend returned the best available options anyway.
 - Frequent remote retries or `*_request_failed` errors:
   - Verify the configured base URLs, auth headers, and local network access to the configured services.
 - OFF rate limiting:

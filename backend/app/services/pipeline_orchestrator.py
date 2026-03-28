@@ -45,12 +45,19 @@ class PipelineOrchestrator:
         trace: List[TraceStep] = []
         image_product: Optional[ProductData] = None
         off_product: Optional[ProductData] = None
+        effective_barcode = (pipeline_input.barcode or "").strip() or None
 
         async with self._trace_step(trace, "extract_image") as metadata:
             if pipeline_input.image_path:
                 try:
                     image_product = await self.extractor.extract(pipeline_input)
                     metadata["source"] = image_product.source
+                    extracted_barcode = (image_product.barcode or "").strip() or None
+                    if extracted_barcode:
+                        metadata["extracted_barcode"] = extracted_barcode
+                        if not effective_barcode:
+                            effective_barcode = extracted_barcode
+                            metadata["barcode_promoted_for_lookup"] = True
                 except AppError:
                     raise
                 except Exception as exc:
@@ -61,12 +68,13 @@ class PipelineOrchestrator:
                 metadata["status_override"] = "skipped"
 
         async with self._trace_step(trace, "fetch_openfoodfacts") as metadata:
-            if pipeline_input.barcode:
+            if effective_barcode:
                 try:
                     off_result = await self.off_client.fetch_product_result(
-                        pipeline_input.barcode,
+                        effective_barcode,
                         locale=pipeline_input.locale,
                     )
+                    metadata["lookup_barcode"] = effective_barcode
                     metadata["off_status"] = off_result.status
                     metadata["http_status"] = off_result.http_status
                     metadata["retry_count"] = off_result.meta.get("retry_count", 0)
@@ -81,7 +89,7 @@ class PipelineOrchestrator:
                         off_payload = {"status": 1, "product": off_result.product or {}}
                         off_product, normalization_warnings = self.normalizer.normalize_off_payload_with_warnings(
                             off_payload,
-                            barcode=pipeline_input.barcode,
+                            barcode=effective_barcode,
                         )
                         metadata["found"] = bool(off_result.product)
                         if normalization_warnings:
@@ -94,7 +102,7 @@ class PipelineOrchestrator:
                             try:
                                 ingredients_product = await self.extractor.extract_remote_image_url(
                                     ingredients_image_url,
-                                    barcode=pipeline_input.barcode,
+                                    barcode=effective_barcode,
                                     user_notes="Focus on extracting ingredients_text from the ingredient panel image when visible.",
                                 )
                                 if ingredients_product.ingredients_text or ingredients_product.eco_ingredient_signals:
@@ -119,7 +127,7 @@ class PipelineOrchestrator:
                                 metadata["ingredients_image_error"] = str(exc)
                     else:
                         off_product = ProductData(
-                            barcode=pipeline_input.barcode,
+                            barcode=effective_barcode,
                             source="unknown",
                             confidence=0.0,
                         )
@@ -141,7 +149,7 @@ class PipelineOrchestrator:
                                 metadata["reason_codes"].append("off_retry_exhausted")
                 except AppError as exc:
                     off_product = ProductData(
-                        barcode=pipeline_input.barcode,
+                        barcode=effective_barcode,
                         source="unknown",
                         confidence=0.0,
                     )
@@ -151,7 +159,7 @@ class PipelineOrchestrator:
                     metadata["degraded"] = True
                 except Exception as exc:
                     off_product = ProductData(
-                        barcode=pipeline_input.barcode,
+                        barcode=effective_barcode,
                         source="unknown",
                         confidence=0.0,
                     )

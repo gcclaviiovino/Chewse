@@ -158,6 +158,10 @@ class RagService:
             enriched_item.setdefault("candidate_barcode", candidate.barcode)
             enriched_item.setdefault("candidate_product_name", candidate.product_name)
             enriched_item.setdefault("candidate_brand", candidate.brand)
+            enriched_item.setdefault("candidate_ingredients_text", candidate.ingredients_text)
+            enriched_item.setdefault("candidate_packaging", candidate.packaging)
+            enriched_item.setdefault("candidate_origins", candidate.origins)
+            enriched_item.setdefault("candidate_labels_tags", candidate.labels_tags)
             enriched_item.setdefault("candidate_ecoscore_score", candidate.ecoscore_score)
             enriched_item.setdefault("candidate_ecoscore_grade", candidate.ecoscore_grade)
             enriched_item.setdefault("candidate_co2e_kg_per_kg", candidate.co2e_kg_per_kg)
@@ -324,6 +328,10 @@ class RagService:
                     candidate_barcode=candidate.barcode,
                     candidate_product_name=candidate.product_name,
                     candidate_brand=candidate.brand,
+                    candidate_ingredients_text=candidate.ingredients_text,
+                    candidate_packaging=candidate.packaging,
+                    candidate_origins=candidate.origins,
+                    candidate_labels_tags=candidate.labels_tags,
                     candidate_ecoscore_score=candidate.ecoscore_score,
                     candidate_ecoscore_grade=candidate.ecoscore_grade,
                     candidate_co2e_kg_per_kg=candidate.co2e_kg_per_kg,

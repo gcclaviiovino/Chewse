@@ -18,8 +18,8 @@ from app.core.errors import AppError, ErrorEnvelope
 from app.core.logger import configure_logging
 from app.core.observability import generate_trace_id, get_trace_id, log_event, redact_data, safe_debug_trace, set_trace_id
 from app.core.settings import get_settings
-from app.pipeline import build_orchestrator
-from app.schemas.pipeline import PipelineInput, PipelineOutput, UploadPhotoResponse
+from app.pipeline import build_alternatives_service, build_orchestrator
+from app.schemas.pipeline import AlternativesRequest, AlternativesResponse, PipelineInput, PipelineOutput, UploadPhotoResponse
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -181,6 +181,12 @@ async def health() -> dict:
 async def pipeline_run(payload: PipelineInput) -> PipelineOutput:
     orchestrator = build_orchestrator()
     return await orchestrator.run_pipeline(payload)
+
+
+@app.post("/alternatives/from-barcode", response_model=AlternativesResponse)
+async def alternatives_from_barcode(payload: AlternativesRequest) -> AlternativesResponse:
+    service = build_alternatives_service()
+    return await service.get_alternatives(payload)
 
 
 @app.post("/api/upload-photo", response_model=UploadPhotoResponse)

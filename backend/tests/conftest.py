@@ -70,11 +70,12 @@ class FakeLLMClient(LLMClient):
         return {
             "suggestions": [
                 {
-                    "title": "Alternativa meno salata",
-                    "suggestion": "Valuta un prodotto simile con meno sale.",
-                    "rationale": "Riduce il carico di sodio complessivo.",
-                    "sources": [retrieved_docs[0]["id"]],
+                    "title": "Alternativa piu sostenibile",
+                    "suggestion": "Valuta un prodotto simile con impatto ambientale migliore.",
+                    "rationale": "Confronto filtrato su similarita e miglioramento ambientale.",
+                    "sources": [doc["id"]],
                 }
+                for doc in retrieved_docs[:3]
             ]
         }
 
@@ -159,9 +160,21 @@ def sample_image_path(settings: Settings) -> Path:
 def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
     from app import main as app_main
     from app.pipeline import build_orchestrator
+    from app.services.alternatives_service import AlternativesService
+    from app.services.impact_translator import ImpactTranslator
+    from app.services.preferences_evaluator import PreferencesEvaluator
 
     build_orchestrator.cache_clear()
     monkeypatch.setattr(app_main, "settings", settings)
     monkeypatch.setattr(app_main, "build_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(
+        app_main,
+        "build_alternatives_service",
+        lambda: AlternativesService(
+            orchestrator=orchestrator,
+            preferences_evaluator=PreferencesEvaluator(),
+            impact_translator=ImpactTranslator(),
+        ),
+    )
     with TestClient(app) as client:
         yield client

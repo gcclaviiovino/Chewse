@@ -38,6 +38,68 @@ def test_orchestrator_handles_barcode_only(orchestrator, settings, sample_off_pa
     assert result.impact_comparison is None
 
 
+def test_orchestrator_uses_barcode_extracted_from_image_for_off_lookup(
+    orchestrator, settings, sample_image_path, sample_off_payload
+) -> None:
+    barcode = sample_off_payload["product"]["code"]
+    (settings.off_data_dir / "{}.json".format(barcode)).write_text(json.dumps(sample_off_payload), encoding="utf-8")
+    asyncio.run(orchestrator.rag_service.reindex_from_local_subset())
+
+    async def fake_extract(_pipeline_input):
+        return orchestrator.normalizer.normalize_llm_payload(
+            {
+                "product_name": None,
+                "brand": None,
+                "barcode": barcode,
+                "confidence": 0.66,
+            }
+        )
+
+    orchestrator.extractor.extract = fake_extract
+
+    result = asyncio.run(orchestrator.run_pipeline(PipelineInput(image_path=str(sample_image_path))))
+
+    assert result.product.barcode == barcode
+    assert result.product.product_name == "Biscotti Avena"
+    assert result.product.source == "hybrid"
+    assert result.score.official_score == 62
+    extract_trace = next(step for step in result.trace if step.step_name == "extract_image")
+    assert extract_trace.metadata["extracted_barcode"] == barcode
+    assert extract_trace.metadata["barcode_promoted_for_lookup"] is True
+    off_trace = next(step for step in result.trace if step.step_name == "fetch_openfoodfacts")
+    assert off_trace.metadata["lookup_barcode"] == barcode
+    assert off_trace.status == "ok"
+
+
+def test_orchestrator_normalizes_spaced_barcode_extracted_from_image_for_off_lookup(
+    orchestrator, settings, sample_image_path, sample_off_payload
+) -> None:
+    barcode = sample_off_payload["product"]["code"]
+    spaced_barcode = "1234 567 890123"
+    (settings.off_data_dir / "{}.json".format(barcode)).write_text(json.dumps(sample_off_payload), encoding="utf-8")
+    asyncio.run(orchestrator.rag_service.reindex_from_local_subset())
+
+    async def fake_extract(_pipeline_input):
+        return orchestrator.normalizer.normalize_llm_payload(
+            {
+                "product_name": None,
+                "brand": None,
+                "barcode": spaced_barcode,
+                "confidence": 0.66,
+            }
+        )
+
+    orchestrator.extractor.extract = fake_extract
+
+    result = asyncio.run(orchestrator.run_pipeline(PipelineInput(image_path=str(sample_image_path))))
+
+    assert result.product.barcode == barcode
+    assert result.product.product_name == "Biscotti Avena"
+    off_trace = next(step for step in result.trace if step.step_name == "fetch_openfoodfacts")
+    assert off_trace.metadata["lookup_barcode"] == barcode
+    assert off_trace.status == "ok"
+
+
 def test_orchestrator_handles_missing_fields_fallback(orchestrator) -> None:
     result = asyncio.run(orchestrator.run_pipeline(PipelineInput(user_query="snack salutare")))
 

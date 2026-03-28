@@ -122,6 +122,7 @@ class ProductNormalizer:
 
     def normalize_llm_payload(self, payload: Optional[Dict[str, Any]], barcode: Optional[str] = None) -> ProductData:
         payload = payload or {}
+        warnings: List[str] = []
         normalized_nutriments = self._normalize_nutriments(payload.get("nutriments") or {})
         normalized_nutriments = {
             key: value for key, value in normalized_nutriments.items() if value is not None
@@ -134,7 +135,7 @@ class ProductNormalizer:
         labels_tags = self._as_list(payload.get("labels_tags"))
         categories_tags = self._as_list(payload.get("categories_tags"))
         quantity = self._coerce_string(payload.get("quantity"))
-        normalized_barcode = barcode or self._coerce_string(payload.get("barcode"))
+        normalized_barcode = self._normalize_barcode(barcode or payload.get("barcode"), warnings)
         field_provenance = self._build_field_provenance(
             source="image_llm",
             product_name=product_name,

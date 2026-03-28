@@ -110,6 +110,10 @@ class RagSuggestion(BaseModel):
     candidate_barcode: Optional[str] = None
     candidate_product_name: Optional[str] = None
     candidate_brand: Optional[str] = None
+    candidate_ingredients_text: Optional[str] = None
+    candidate_packaging: Optional[str] = None
+    candidate_origins: Optional[str] = None
+    candidate_labels_tags: List[str] = Field(default_factory=list)
     candidate_ecoscore_score: Optional[int] = None
     candidate_ecoscore_grade: Optional[str] = None
     candidate_co2e_kg_per_kg: Optional[float] = None
@@ -174,3 +178,27 @@ class UploadPhotoResponse(BaseModel):
     score_source: Literal["off_ecoscore", "off_plus_local", "local_fallback"] = "local_fallback"
     subscores: Dict[str, int] = Field(default_factory=dict)
     flags: List[str] = Field(default_factory=list)
+
+
+class AlternativesRequest(BaseModel):
+    barcode: str
+    locale: str = "it-IT"
+    user_query: Optional[str] = None
+    preferences_markdown: Optional[str] = None
+
+
+class AlternativeCandidate(BaseModel):
+    suggestion: RagSuggestion
+    is_preference_compatible: bool = True
+    preference_warnings: List[str] = Field(default_factory=list)
+    requires_disclaimer: bool = False
+
+
+class AlternativesResponse(BaseModel):
+    trace_id: Optional[str] = None
+    base_product: ProductData
+    candidates: List[AlternativeCandidate] = Field(default_factory=list)
+    selected_candidate: Optional[AlternativeCandidate] = None
+    impact_comparison: Optional[ImpactComparison] = None
+    requires_disclaimer: bool = False
+    preference_source: Literal["none", "inline_markdown"] = "none"
