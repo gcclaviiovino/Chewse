@@ -7,13 +7,15 @@ from app.schemas.pipeline import PipelineInput
 from app.services.llm_client import LLMClient
 
 
-def test_orchestrator_handles_image_only(orchestrator) -> None:
-    result = asyncio.run(orchestrator.run_pipeline(PipelineInput(image_path="tests/assets/product.jpg")))
+def test_orchestrator_handles_image_only(orchestrator, sample_image_path) -> None:
+    result = asyncio.run(orchestrator.run_pipeline(PipelineInput(image_path=str(sample_image_path))))
 
     assert result.product.source == "image_llm"
     assert result.score.total_score >= 0
     assert result.explanation_short
     assert result.trace
+    assert result.trace_id
+    assert all(step.trace_id == result.trace_id for step in result.trace)
 
 
 def test_orchestrator_handles_barcode_only(orchestrator, settings, sample_off_payload) -> None:
@@ -72,3 +74,12 @@ def test_extracts_chat_content_from_block_response() -> None:
         ]
     }
     assert LLMClient._extract_message_content(payload) == "{\"product_name\": \"X\"}"
+
+
+def test_parser_falls_back_to_partial_object_on_unrecoverable_json() -> None:
+    malformed = 'explanation_short: "Short", why_bullets: ["One", "Two"'
+    parsed = LLMClient.parse_json_response(malformed, fallback_fields=("explanation_short", "why_bullets"))
+
+    assert parsed["explanation_short"] == "Short"
+    assert parsed["why_bullets"] == ["One", "Two"]
+    assert parsed["_parse_error"] is True

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional
 
 from app.schemas.pipeline import ProductData
@@ -50,7 +51,8 @@ class ProductNormalizer:
                 continue
             if isinstance(value, str):
                 try:
-                    normalized[key] = float(value.replace(",", "."))
+                    match = re.search(r"[-+]?\d+(?:[.,]\d+)?", value)
+                    normalized[key] = float(match.group(0).replace(",", ".")) if match else value.strip()
                 except ValueError:
                     normalized[key] = value.strip()
                 continue

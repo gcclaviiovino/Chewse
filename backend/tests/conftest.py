@@ -4,8 +4,10 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+from fastapi.testclient import TestClient
 
 from app.core.settings import Settings
+from app.main import app
 from app.schemas.pipeline import ProductData
 from app.services.embeddings_client import EmbeddingsClient
 from app.services.explainer import ScoreExplainer
@@ -84,10 +86,14 @@ def settings(tmp_path: Path) -> Settings:
     off_dir.mkdir(parents=True, exist_ok=True)
     chroma_dir = tmp_path / "chroma"
     chroma_dir.mkdir(parents=True, exist_ok=True)
+    images_dir = tmp_path / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
     return Settings(
         backend_dir=Path(__file__).resolve().parents[1],
         off_data_dir=off_dir,
         chroma_path=chroma_dir,
+        allowed_image_roots_raw=str(images_dir),
+        enable_pipeline_debug_last=True,
     )
 
 
@@ -120,3 +126,23 @@ def sample_off_payload() -> dict:
             "quantity": "250 g",
         },
     }
+
+
+@pytest.fixture
+def sample_image_path(settings: Settings) -> Path:
+    image_root = settings.allowed_image_roots()[0]
+    image_path = image_root / "product.jpg"
+    image_path.write_bytes(b"fake-image")
+    return image_path
+
+
+@pytest.fixture
+def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
+    from app import main as app_main
+    from app.pipeline import build_orchestrator
+
+    build_orchestrator.cache_clear()
+    monkeypatch.setattr(app_main, "settings", settings)
+    monkeypatch.setattr(app_main, "build_orchestrator", lambda: orchestrator)
+    with TestClient(app) as client:
+        yield client

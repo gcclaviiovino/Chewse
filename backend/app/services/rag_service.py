@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ except ImportError:  # pragma: no cover
     chromadb = None
 
 from app.core.settings import Settings
+from app.core.observability import log_event
 from app.product import model_to_dict
 from app.schemas.pipeline import ProductData, RagSuggestion
 from app.services.embeddings_client import EmbeddingsClient
@@ -28,6 +30,7 @@ class RagService:
         self.llm_client = llm_client
         self.client = self._build_client()
         self.collection_name = "off_snippets"
+        self.logger = logging.getLogger("social-food.rag")
 
     async def healthcheck(self) -> Dict[str, Any]:
         try:
@@ -68,29 +71,59 @@ class RagService:
         user_query: str,
         top_k: Optional[int] = None,
     ) -> List[RagSuggestion]:
+        return (await self.suggest_with_trace(product=product, user_query=user_query, top_k=top_k))[0]
+
+    async def suggest_with_trace(
+        self,
+        product: ProductData,
+        user_query: str,
+        top_k: Optional[int] = None,
+        score_threshold: Optional[float] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
+    ) -> tuple[List[RagSuggestion], Dict[str, Any]]:
+        trace: Dict[str, Any] = {}
         try:
             collection = self._get_collection()
-        except Exception:
-            return []
+        except Exception as exc:
+            trace["warning"] = "rag_index_unavailable"
+            trace["detail"] = str(exc)
+            return [], trace
 
         if collection.count() == 0:
-            return []
+            trace["warning"] = "rag_index_empty"
+            return [], trace
 
         query_text = self._build_query(product, user_query)
-        query_embedding = await self.embeddings_client.embed_text(query_text)
+        try:
+            query_embedding = await self.embeddings_client.embed_text(query_text)
+        except Exception as exc:
+            trace["warning"] = "embeddings_unavailable"
+            trace["detail"] = str(exc)
+            return [], trace
         results = collection.query(query_embeddings=[query_embedding], n_results=top_k or self.settings.rag_top_k)
-        docs = self._format_results(results)
+        docs = self._format_results(
+            results,
+            score_threshold=score_threshold if score_threshold is not None else self.settings.rag_score_threshold,
+            metadata_filters=metadata_filters or self.settings.rag_metadata_filters(),
+        )
         if not docs:
-            return []
+            trace["warning"] = "rag_no_match"
+            return [], trace
 
         prompt_path = self.settings.backend_dir / "app" / "prompts" / "rag_suggestions.md"
         prompt = prompt_path.read_text(encoding="utf-8")
-        response = await self.llm_client.generate_rag_answer(
-            prompt=prompt,
-            product_payload=model_to_dict(product),
-            user_query=user_query,
-            retrieved_docs=docs,
-        )
+        try:
+            response = await self.llm_client.generate_rag_answer(
+                prompt=prompt,
+                product_payload=model_to_dict(product),
+                user_query=user_query,
+                retrieved_docs=docs,
+            )
+        except Exception as exc:
+            trace["warning"] = "rag_generation_failed"
+            trace["detail"] = str(exc)
+            log_event(self.logger, logging.WARNING, "rag_generation_failed", detail=str(exc))
+            return [], trace
 
         suggestions_payload = response.get("suggestions") or []
         suggestions: List[RagSuggestion] = []
@@ -99,7 +132,9 @@ class RagService:
                 suggestions.append(RagSuggestion(**item))
             except Exception:
                 continue
-        return suggestions
+        trace["retrieved_count"] = len(docs)
+        trace["suggestion_count"] = len(suggestions)
+        return suggestions, trace
 
     def _get_collection(self):
         return self.client.get_or_create_collection(name=self.collection_name)
@@ -148,17 +183,36 @@ class RagService:
         ).strip()
 
     @staticmethod
-    def _format_results(results: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _format_results(
+        results: Dict[str, Any],
+        *,
+        score_threshold: float,
+        metadata_filters: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
         documents = (results.get("documents") or [[]])[0]
         metadatas = (results.get("metadatas") or [[]])[0]
         ids = (results.get("ids") or [[]])[0]
+        distances = (results.get("distances") or [[]])[0]
         formatted: List[Dict[str, Any]] = []
+        seen_normalized: set[str] = set()
         for index, document in enumerate(documents):
+            metadata = metadatas[index] if index < len(metadatas) else {}
+            if metadata_filters and any(metadata.get(key) != value for key, value in metadata_filters.items()):
+                continue
+            distance = distances[index] if index < len(distances) else 1.0
+            score = max(0.0, 1.0 - float(distance))
+            if score < score_threshold:
+                continue
+            normalized_text = " ".join(str(document or "").lower().split())
+            if normalized_text in seen_normalized:
+                continue
+            seen_normalized.add(normalized_text)
             formatted.append(
                 {
                     "id": ids[index] if index < len(ids) else "unknown",
                     "text": document,
-                    "metadata": metadatas[index] if index < len(metadatas) else {},
+                    "metadata": metadata,
+                    "score": round(score, 4),
                 }
             )
         return formatted
@@ -198,6 +252,7 @@ class _InMemoryCollection:
             "ids": [[item["id"] for item in top_items]],
             "documents": [[item["document"] for item in top_items]],
             "metadatas": [[item["metadata"] for item in top_items]],
+            "distances": [[_cosine_like_distance(query, item["embedding"]) for item in top_items]],
         }
 
 

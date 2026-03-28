@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import mimetypes
 import re
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from app.core.errors import AppError
+from app.core.observability import guard_untrusted_text, log_event, redact_data, truncate_text
+from app.core.retry import async_retry
 from app.core.settings import Settings
 
 
@@ -17,13 +21,11 @@ class LLMClient:
         self.settings = settings
         self.headers = settings.build_auth_headers()
         self.base_url = settings.normalize_base_url(settings.llm_base_url)
+        self.logger = logging.getLogger("social-food.llm")
 
     async def healthcheck(self) -> Dict[str, Any]:
         try:
-            async with httpx.AsyncClient(timeout=5.0, headers=self.headers) as client:
-                response = await client.get("{}/v1/models".format(self.base_url))
-                response.raise_for_status()
-                data = response.json()
+            data = await self._request_json("GET", "{}/v1/models".format(self.base_url), timeout=5.0, retry_count=1)
             return {"status": "ok", "model": self.settings.llm_model, "available": len(data.get("data", []))}
         except Exception as exc:
             return {"status": "error", "model": self.settings.llm_model, "detail": str(exc)}
@@ -36,7 +38,10 @@ class LLMClient:
     ) -> Dict[str, Any]:
         prompt_text = self._render_prompt(
             prompt,
-            {"user_notes": user_notes or "", "image_path": image_path},
+            {
+                "user_notes": guard_untrusted_text(user_notes, self.settings.llm_input_max_chars),
+                "image_path": image_path,
+            },
         )
         image_url = self._build_data_url(image_path)
         raw = await self._chat_completion(
@@ -51,7 +56,7 @@ class LLMClient:
             ],
             thinking=False,
         )
-        return self.parse_json_response(raw)
+        return self.parse_json_response(raw, fallback_fields=("product_name", "brand", "barcode", "quantity", "packaging"))
 
     async def generate_explanation(
         self,
@@ -64,15 +69,15 @@ class LLMClient:
             prompt,
             {
                 "mode": mode,
-                "product_json": json.dumps(product_payload, ensure_ascii=False),
-                "score_json": json.dumps(score_payload, ensure_ascii=False),
+                "product_json": truncate_text(json.dumps(redact_data(product_payload), ensure_ascii=False), self.settings.llm_input_max_chars),
+                "score_json": truncate_text(json.dumps(score_payload, ensure_ascii=False), self.settings.llm_input_max_chars),
             },
         )
         raw = await self._chat_completion(
             messages=[{"role": "user", "content": prompt_text}],
             thinking=mode == "think",
         )
-        return self.parse_json_response(raw)
+        return self.parse_json_response(raw, fallback_fields=("explanation_short", "why_bullets", "facts", "assumptions", "actionable_advice"))
 
     async def generate_rag_answer(
         self,
@@ -84,16 +89,16 @@ class LLMClient:
         prompt_text = self._render_prompt(
             prompt,
             {
-                "product_json": json.dumps(product_payload, ensure_ascii=False),
-                "user_query": user_query,
-                "docs_json": json.dumps(retrieved_docs, ensure_ascii=False),
+                "product_json": truncate_text(json.dumps(redact_data(product_payload), ensure_ascii=False), self.settings.llm_input_max_chars),
+                "user_query": guard_untrusted_text(user_query, self.settings.llm_input_max_chars),
+                "docs_json": truncate_text(json.dumps(redact_data(retrieved_docs), ensure_ascii=False), self.settings.llm_input_max_chars),
             },
         )
         raw = await self._chat_completion(
             messages=[{"role": "user", "content": prompt_text}],
             thinking=False,
         )
-        return self.parse_json_response(raw)
+        return self.parse_json_response(raw, fallback_fields=("suggestions",))
 
     async def _chat_completion(
         self,
@@ -108,20 +113,17 @@ class LLMClient:
         if thinking:
             payload["thinking"] = True
 
-        async with httpx.AsyncClient(
-            timeout=self.settings.request_timeout_seconds,
-            headers=self.headers,
-        ) as client:
-            response = await client.post(
-                "{}/v1/chat/completions".format(self.base_url),
-                json=payload,
-            )
-            response.raise_for_status()
-            data = response.json()
-        return self._extract_message_content(data)
+        data = await self._request_json(
+            "POST",
+            "{}/v1/chat/completions".format(self.base_url),
+            json_body=payload,
+            timeout=self.settings.llm_timeout_seconds,
+            retry_count=self.settings.llm_retry_count,
+        )
+        return truncate_text(self._extract_message_content(data), self.settings.llm_output_max_chars)
 
     @classmethod
-    def parse_json_response(cls, raw_text: str) -> Dict[str, Any]:
+    def parse_json_response(cls, raw_text: str, fallback_fields: tuple[str, ...] = ()) -> Dict[str, Any]:
         raw_text = raw_text.strip()
         if not raw_text:
             return {}
@@ -135,7 +137,10 @@ class LLMClient:
                 parsed = json.loads(repaired)
                 return parsed if isinstance(parsed, dict) else {"data": parsed}
             except json.JSONDecodeError:
-                return {"raw_text": raw_text, "_parse_error": True}
+                partial = cls._extract_partial_object(raw_text, fallback_fields)
+                partial["raw_text"] = truncate_text(raw_text, 400)
+                partial["_parse_error"] = True
+                return partial
 
     @staticmethod
     def _repair_json(raw_text: str) -> str:
@@ -147,6 +152,27 @@ class LLMClient:
         return candidate
 
     @staticmethod
+    def _extract_partial_object(raw_text: str, fallback_fields: tuple[str, ...]) -> Dict[str, Any]:
+        partial: Dict[str, Any] = {}
+        for key in fallback_fields:
+            if key in {"why_bullets", "facts", "assumptions", "actionable_advice", "suggestions"}:
+                list_match = re.search(r'"?{}"?\s*:\s*\[(.*?)(?:\]|$)'.format(re.escape(key)), raw_text, re.DOTALL)
+                if not list_match:
+                    continue
+                items = re.findall(r'"([^"]+)"|\'([^\']+)\'', list_match.group(1))
+                partial[key] = [left or right for left, right in items if (left or right)]
+                continue
+            match = re.search(r'"?{}"?\s*:\s*("([^"]*)"|\'([^\']*)\'|[-+]?\d+(?:[\.,]\d+)?)'.format(re.escape(key)), raw_text)
+            if not match:
+                continue
+            if match.group(2) is not None or match.group(3) is not None:
+                partial[key] = match.group(2) or match.group(3)
+            else:
+                numeric = match.group(1).replace(",", ".")
+                partial[key] = float(numeric) if "." in numeric else int(numeric)
+        return partial
+
+    @staticmethod
     def _extract_message_content(payload: Dict[str, Any]) -> str:
         choices = payload.get("choices") or []
         if not choices:
@@ -154,18 +180,18 @@ class LLMClient:
         message = choices[0].get("message", {})
         content = message.get("content", "")
         if isinstance(content, str):
-            return content
+            return truncate_text(content, 12000)
         if isinstance(content, list):
             text_parts: List[str] = []
             for item in content:
                 if isinstance(item, dict) and item.get("type") == "text":
                     text_parts.append(item.get("text", ""))
-            return "\n".join([part for part in text_parts if part])
+            return truncate_text("\n".join([part for part in text_parts if part]), 12000)
         if isinstance(content, dict):
             for key in ("text", "output_text", "content"):
                 if key in content and isinstance(content[key], str):
-                    return content[key]
-        return json.dumps(content)
+                    return truncate_text(content[key], 12000)
+        return truncate_text(json.dumps(content), 12000)
 
     @staticmethod
     def _build_data_url(image_path: str) -> str:
@@ -182,3 +208,44 @@ class LLMClient:
         for key, value in values.items():
             rendered = rendered.replace("{" + key + "}", value)
         return rendered
+
+    async def _request_json(
+        self,
+        method: str,
+        url: str,
+        *,
+        json_body: Optional[Dict[str, Any]] = None,
+        timeout: float,
+        retry_count: int,
+    ) -> Dict[str, Any]:
+        async def operation() -> Dict[str, Any]:
+            async with httpx.AsyncClient(timeout=timeout, headers=self.headers) as client:
+                response = await client.request(method, url, json=json_body)
+                response.raise_for_status()
+                return response.json()
+
+        try:
+            return await async_retry(
+                operation,
+                attempts=max(1, retry_count + 1),
+                base_delay_seconds=self.settings.retry_backoff_base_seconds,
+                jitter_seconds=self.settings.retry_jitter_seconds,
+                retry_on=(httpx.TimeoutException, httpx.HTTPError),
+            )
+        except Exception as exc:
+            log_event(
+                self.logger,
+                logging.ERROR,
+                "llm_request_failed",
+                method=method,
+                url=url,
+                retry_count=retry_count,
+                error_type=type(exc).__name__,
+                message=str(exc),
+            )
+            raise AppError(
+                "llm_request_failed",
+                "The LLM service request failed.",
+                status_code=502,
+                details={"error_type": type(exc).__name__},
+            ) from exc

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import time
+import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Dict, List, Optional
 
+from app.core.errors import AppError
+from app.core.observability import StepTimer, get_trace_id, log_event, set_trace_id, summarize_metadata
 from app.product import merge_product_data
 from app.schemas.pipeline import PipelineInput, PipelineOutput, ProductData, TraceStep
 from app.services.explainer import ScoreExplainer
@@ -12,6 +14,8 @@ from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.rag_service import RagService
 from app.services.scoring_engine import ScoringEngine
+
+logger = logging.getLogger("social-food.pipeline")
 
 
 class PipelineOrchestrator:
@@ -30,25 +34,42 @@ class PipelineOrchestrator:
         self.scoring_engine = scoring_engine
         self.rag_service = rag_service
         self.explainer = explainer
+        self._last_debug_payload: Dict[str, Any] = {}
 
     async def run_pipeline(self, pipeline_input: PipelineInput) -> PipelineOutput:
+        trace_id = get_trace_id()
+        set_trace_id(trace_id)
         trace: List[TraceStep] = []
         image_product: Optional[ProductData] = None
         off_product: Optional[ProductData] = None
 
         async with self._trace_step(trace, "extract_image") as metadata:
             if pipeline_input.image_path:
-                image_product = await self.extractor.extract(pipeline_input)
-                metadata["source"] = image_product.source
+                try:
+                    image_product = await self.extractor.extract(pipeline_input)
+                    metadata["source"] = image_product.source
+                except AppError:
+                    raise
+                except Exception as exc:
+                    metadata["error"] = str(exc)
+                    metadata["degraded"] = True
             else:
                 metadata["reason"] = "image_path_not_provided"
                 metadata["status_override"] = "skipped"
 
         async with self._trace_step(trace, "fetch_openfoodfacts") as metadata:
             if pipeline_input.barcode:
-                off_payload = await self.off_client.fetch_product(pipeline_input.barcode)
-                off_product = self.normalizer.normalize_off_payload(off_payload, barcode=pipeline_input.barcode)
-                metadata["found"] = bool(off_payload)
+                try:
+                    off_payload = await self.off_client.fetch_product(pipeline_input.barcode)
+                    off_product = self.normalizer.normalize_off_payload(off_payload, barcode=pipeline_input.barcode)
+                    metadata["found"] = bool(off_payload)
+                except AppError as exc:
+                    metadata["error"] = exc.message
+                    metadata["error_code"] = exc.error_code
+                    metadata["degraded"] = True
+                except Exception as exc:
+                    metadata["error"] = str(exc)
+                    metadata["degraded"] = True
             else:
                 metadata["reason"] = "barcode_not_provided"
                 metadata["status_override"] = "skipped"
@@ -74,13 +95,15 @@ class PipelineOrchestrator:
             metadata["bullet_count"] = len(explanation_bullets)
 
         async with self._trace_step(trace, "rag_suggestions") as metadata:
-            rag_suggestions = await self.rag_service.suggest(
+            rag_suggestions, rag_trace = await self.rag_service.suggest_with_trace(
                 product=product,
                 user_query=pipeline_input.user_query or product.product_name or "healthy alternative",
             )
+            metadata.update(rag_trace)
             metadata["suggestion_count"] = len(rag_suggestions)
 
-        return PipelineOutput(
+        output = PipelineOutput(
+            trace_id=trace_id,
             product=product,
             score=score,
             explanation_short=explanation_short,
@@ -88,10 +111,25 @@ class PipelineOrchestrator:
             rag_suggestions=rag_suggestions,
             trace=trace,
         )
+        self._last_debug_payload = {
+            "trace_id": trace_id,
+            "input_summary": {
+                "has_image_path": bool(pipeline_input.image_path),
+                "has_barcode": bool(pipeline_input.barcode),
+                "has_user_query": bool(pipeline_input.user_query),
+                "mode": pipeline_input.mode,
+                "locale": pipeline_input.locale,
+            },
+            "output": output,
+        }
+        return output
+
+    def get_last_debug_payload(self) -> Dict[str, Any]:
+        return self._last_debug_payload
 
     @asynccontextmanager
     async def _trace_step(self, trace: List[TraceStep], step_name: str) -> AsyncIterator[Dict[str, Any]]:
-        started_at = time.perf_counter()
+        timer = StepTimer()
         metadata: Dict[str, Any] = {}
         status = "ok"
         try:
@@ -104,11 +142,27 @@ class PipelineOrchestrator:
             if metadata.get("status_override") == "skipped":
                 status = "skipped"
                 metadata.pop("status_override", None)
+            elif metadata.get("degraded") and status == "ok":
+                status = "error"
+            trace_id = get_trace_id()
+            metadata_summary = summarize_metadata(metadata)
             trace.append(
                 TraceStep(
                     step_name=step_name,
-                    duration_ms=int((time.perf_counter() - started_at) * 1000),
+                    duration_ms=timer.duration_ms,
                     status=status,
+                    trace_id=trace_id,
+                    metadata_summary=metadata_summary,
                     metadata=metadata,
                 )
+            )
+            log_event(
+                logger,
+                logging.INFO if status != "error" else logging.WARNING,
+                "pipeline_step",
+                step=step_name,
+                status=status,
+                duration_ms=timer.duration_ms,
+                trace_id=trace_id,
+                metadata_summary=metadata_summary,
             )

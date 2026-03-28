@@ -28,3 +28,22 @@ def test_rag_service_returns_suggestions(settings, sample_off_payload) -> None:
 
     assert result
     assert result[0].sources == [barcode]
+
+
+def test_rag_service_deduplicates_near_identical_chunks(settings) -> None:
+    from tests.conftest import FakeEmbeddingsClient, FakeLLMClient
+    from app.services.rag_service import RagService
+
+    rag_service = RagService(settings, FakeEmbeddingsClient(settings), FakeLLMClient(settings))
+    collection = rag_service._get_collection()
+    collection.upsert(
+        ids=["1", "2"],
+        embeddings=[[2.0, 1.0, 0.5], [2.0, 1.0, 0.5]],
+        metadatas=[{"barcode": "1"}, {"barcode": "2"}],
+        documents=["same text", "same text"],
+    )
+
+    suggestions, trace = asyncio.run(rag_service.suggest_with_trace(ProductData(product_name="X"), user_query="same"))
+
+    assert trace["retrieved_count"] == 1
+    assert suggestions

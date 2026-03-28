@@ -1,8 +1,17 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
+
+try:
+    from pydantic import field_validator
+except ImportError:  # pragma: no cover
+    field_validator = None
+    from pydantic import validator
+else:  # pragma: no cover
+    validator = None
 
 try:
     from pydantic import model_validator
@@ -20,6 +29,25 @@ class PipelineInput(BaseModel):
     user_query: Optional[str] = None
     mode: Literal["fast", "deep"] = "fast"
     locale: str = "it-IT"
+
+    if field_validator is not None:
+
+        @field_validator("locale", mode="before")
+        @classmethod
+        def validate_locale(cls, value: Optional[str]) -> str:
+            locale = (value or "it-IT").strip()
+            if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", locale):
+                raise ValueError("locale must use the format ll-CC, for example it-IT.")
+            return locale
+
+    else:
+
+        @validator("locale", pre=True, always=True)
+        def validate_locale(cls, value: Optional[str]) -> str:
+            locale = (value or "it-IT").strip()
+            if not re.fullmatch(r"[a-z]{2}-[A-Z]{2}", locale):
+                raise ValueError("locale must use the format ll-CC, for example it-IT.")
+            return locale
 
     if model_validator is not None:
 
@@ -58,6 +86,7 @@ class ScoreResult(BaseModel):
     subscores: Dict[str, int] = Field(default_factory=dict)
     flags: List[str] = Field(default_factory=list)
     deterministic_reasons: List[str] = Field(default_factory=list)
+    rule_triggers: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class RagSuggestion(BaseModel):
@@ -71,10 +100,13 @@ class TraceStep(BaseModel):
     step_name: str
     duration_ms: int
     status: Literal["ok", "error", "skipped"]
+    trace_id: Optional[str] = None
+    metadata_summary: str = ""
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class PipelineOutput(BaseModel):
+    trace_id: Optional[str] = None
     product: ProductData
     score: ScoreResult
     explanation_short: str

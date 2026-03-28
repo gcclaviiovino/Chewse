@@ -22,3 +22,18 @@ def test_scoring_engine_is_deterministic() -> None:
     assert result_a.total_score == result_b.total_score
     assert result_a.subscores == result_b.subscores
     assert "high_sugar" not in result_a.flags
+    assert result_a.rule_triggers
+
+
+def test_scoring_engine_handles_unknown_units_robustly() -> None:
+    engine = ScoringEngine()
+    product = ProductData(
+        nutriments={"sugars_100g": "12 g", "salt_100g": "unknown"},
+        ingredients_text=None,
+        confidence=0.5,
+    )
+
+    result = engine.compute_score(product)
+
+    assert result.total_score >= 0
+    assert any(trigger["code"] == "ingredients_missing" for trigger in result.rule_triggers)

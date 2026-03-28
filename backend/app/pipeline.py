@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from functools import lru_cache
+
 from app.core.settings import get_settings
 from app.schemas.pipeline import PipelineInput, PipelineOutput
 from app.services.embeddings_client import EmbeddingsClient
@@ -13,6 +15,7 @@ from app.services.rag_service import RagService
 from app.services.scoring_engine import ScoringEngine
 
 
+@lru_cache(maxsize=1)
 def build_orchestrator() -> PipelineOrchestrator:
     settings = get_settings()
     normalizer = ProductNormalizer()
