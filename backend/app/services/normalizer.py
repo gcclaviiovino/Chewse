@@ -42,6 +42,12 @@ class ProductNormalizer:
         labels_tags = self._as_list(raw_product.get("labels_tags"), warnings, "off_labels_invalid")
         categories_tags = self._as_list(raw_product.get("categories_tags"), warnings, "off_categories_invalid")
         quantity = self._coerce_string(raw_product.get("quantity"), warnings, "off_quantity_invalid")
+        ecoscore_data = raw_product.get("ecoscore_data") if isinstance(raw_product.get("ecoscore_data"), dict) else {}
+        ecoscore_score = self._coerce_int(raw_product.get("ecoscore_score"))
+        if ecoscore_score is None:
+            ecoscore_score = self._coerce_int(ecoscore_data.get("score"))
+        ecoscore_grade = self._coerce_string(raw_product.get("ecoscore_grade")) or self._coerce_string(ecoscore_data.get("grade"))
+        co2e_kg_per_kg = self._extract_co2e_kg_per_kg(ecoscore_data)
 
         confidence = self._compute_off_confidence(
             product_name=product_name,
@@ -55,6 +61,35 @@ class ProductNormalizer:
             categories_tags=categories_tags,
             quantity=quantity,
         )
+        field_provenance = self._build_field_provenance(
+            source="openfoodfacts",
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
+            ecoscore_score=ecoscore_score,
+            ecoscore_grade=ecoscore_grade,
+            co2e_kg_per_kg=co2e_kg_per_kg,
+        )
+        data_completeness = self._build_data_completeness(
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
+            ecoscore_score=ecoscore_score,
+            ecoscore_grade=ecoscore_grade,
+            co2e_kg_per_kg=co2e_kg_per_kg,
+        )
 
         return (
             ProductData(
@@ -66,6 +101,13 @@ class ProductNormalizer:
                     ingredients_text=ingredients_text,
                     labels_tags=labels_tags,
                 ),
+                ecoscore_score=ecoscore_score,
+                ecoscore_grade=ecoscore_grade,
+                ecoscore_data=ecoscore_data,
+                co2e_kg_per_kg=co2e_kg_per_kg,
+                co2e_source="off_agribalyse" if co2e_kg_per_kg is not None else None,
+                field_provenance=field_provenance,
+                data_completeness=data_completeness,
                 nutriments=normalized_nutriments,
                 packaging=packaging,
                 origins=origins,
@@ -84,21 +126,61 @@ class ProductNormalizer:
         normalized_nutriments = {
             key: value for key, value in normalized_nutriments.items() if value is not None
         }
+        product_name = self._coerce_string(payload.get("product_name"))
+        brand = self._coerce_string(payload.get("brand"))
+        ingredients_text = self._coerce_string(payload.get("ingredients_text"))
+        packaging = self._coerce_string(payload.get("packaging"))
+        origins = self._coerce_string(payload.get("origins"))
+        labels_tags = self._as_list(payload.get("labels_tags"))
+        categories_tags = self._as_list(payload.get("categories_tags"))
+        quantity = self._coerce_string(payload.get("quantity"))
+        normalized_barcode = barcode or self._coerce_string(payload.get("barcode"))
+        field_provenance = self._build_field_provenance(
+            source="image_llm",
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
+            ecoscore_score=None,
+            ecoscore_grade=None,
+            co2e_kg_per_kg=None,
+        )
+        data_completeness = self._build_data_completeness(
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
+            ecoscore_score=None,
+            ecoscore_grade=None,
+            co2e_kg_per_kg=None,
+        )
         return ProductData(
-            product_name=payload.get("product_name"),
-            brand=payload.get("brand"),
-            barcode=barcode or payload.get("barcode"),
-            ingredients_text=payload.get("ingredients_text"),
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
             eco_ingredient_signals=self._extract_eco_ingredient_signals(
-                ingredients_text=self._coerce_string(payload.get("ingredients_text")),
-                labels_tags=self._as_list(payload.get("labels_tags")),
+                ingredients_text=ingredients_text,
+                labels_tags=labels_tags,
             ),
             nutriments=normalized_nutriments,
-            packaging=payload.get("packaging"),
-            origins=payload.get("origins"),
-            labels_tags=self._as_list(payload.get("labels_tags")),
-            categories_tags=self._as_list(payload.get("categories_tags")),
-            quantity=payload.get("quantity"),
+            field_provenance=field_provenance,
+            data_completeness=data_completeness,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
             source="image_llm" if payload else "unknown",
             confidence=float(payload.get("confidence", 0.35 if payload else 0.0)),
         )
@@ -122,6 +204,26 @@ class ProductNormalizer:
                 continue
             normalized[normalized_key] = str(value)
         return normalized
+
+    @staticmethod
+    def _coerce_int(value: Any) -> Optional[int]:
+        if value is None:
+            return None
+        if isinstance(value, bool):
+            return int(value)
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float):
+            return int(round(value))
+        if isinstance(value, str):
+            match = re.search(r"[-+]?\d+(?:[.,]\d+)?", value)
+            if not match:
+                return None
+            try:
+                return int(round(float(match.group(0).replace(",", "."))))
+            except ValueError:
+                return None
+        return None
 
     @staticmethod
     def _pick_string(raw_product: Dict[str, Any], keys: tuple[str, ...], warnings: List[str], warning_code: str) -> Optional[str]:
@@ -253,3 +355,90 @@ class ProductNormalizer:
                 }
             )
         return signals
+
+    @staticmethod
+    def _extract_co2e_kg_per_kg(ecoscore_data: Dict[str, Any]) -> Optional[float]:
+        agribalyse = ecoscore_data.get("agribalyse")
+        if not isinstance(agribalyse, dict):
+            return None
+        co2_total = agribalyse.get("co2_total")
+        if isinstance(co2_total, (int, float)):
+            return float(co2_total)
+        if isinstance(co2_total, str):
+            match = re.search(r"[-+]?\d+(?:[.,]\d+)?", co2_total)
+            if not match:
+                return None
+            try:
+                return float(match.group(0).replace(",", "."))
+            except ValueError:
+                return None
+        return None
+
+    @staticmethod
+    def _build_field_provenance(
+        *,
+        source: str,
+        product_name: Optional[str],
+        brand: Optional[str],
+        barcode: Optional[str],
+        ingredients_text: Optional[str],
+        packaging: Optional[str],
+        origins: Optional[str],
+        labels_tags: List[str],
+        categories_tags: List[str],
+        quantity: Optional[str],
+        ecoscore_score: Optional[int],
+        ecoscore_grade: Optional[str],
+        co2e_kg_per_kg: Optional[float],
+    ) -> Dict[str, Dict[str, Any]]:
+        fields = {
+            "product_name": product_name,
+            "brand": brand,
+            "barcode": barcode,
+            "ingredients_text": ingredients_text,
+            "packaging": packaging,
+            "origins": origins,
+            "labels_tags": labels_tags,
+            "categories_tags": categories_tags,
+            "quantity": quantity,
+            "ecoscore_score": ecoscore_score,
+            "ecoscore_grade": ecoscore_grade,
+            "co2e_kg_per_kg": co2e_kg_per_kg,
+        }
+        provenance: Dict[str, Dict[str, Any]] = {}
+        for field_name, value in fields.items():
+            if value in (None, "", [], {}):
+                continue
+            provenance[field_name] = {"source": source}
+        return provenance
+
+    @staticmethod
+    def _build_data_completeness(
+        *,
+        product_name: Optional[str],
+        brand: Optional[str],
+        barcode: Optional[str],
+        ingredients_text: Optional[str],
+        packaging: Optional[str],
+        origins: Optional[str],
+        labels_tags: List[str],
+        categories_tags: List[str],
+        quantity: Optional[str],
+        ecoscore_score: Optional[int],
+        ecoscore_grade: Optional[str],
+        co2e_kg_per_kg: Optional[float],
+    ) -> Dict[str, bool]:
+        return {
+            "product_name": bool(product_name),
+            "brand": bool(brand),
+            "barcode": bool(barcode),
+            "ingredients_text": bool(ingredients_text),
+            "packaging": bool(packaging),
+            "origins": bool(origins),
+            "labels_tags": bool(labels_tags),
+            "categories_tags": bool(categories_tags),
+            "quantity": bool(quantity),
+            "ecoscore_score": ecoscore_score is not None,
+            "ecoscore_grade": bool(ecoscore_grade),
+            "co2e_kg_per_kg": co2e_kg_per_kg is not None,
+        }

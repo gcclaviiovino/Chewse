@@ -58,6 +58,33 @@ class LLMClient:
         )
         return self.parse_json_response(raw, fallback_fields=("product_name", "brand", "barcode", "quantity", "packaging"))
 
+    async def extract_from_image_url(
+        self,
+        image_url: str,
+        prompt: str,
+        user_notes: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        prompt_text = self._render_prompt(
+            prompt,
+            {
+                "user_notes": guard_untrusted_text(user_notes, self.settings.llm_input_max_chars),
+                "image_path": image_url,
+            },
+        )
+        raw = await self._chat_completion(
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt_text},
+                        {"type": "image_url", "image_url": {"url": image_url}},
+                    ],
+                }
+            ],
+            thinking=False,
+        )
+        return self.parse_json_response(raw, fallback_fields=("product_name", "brand", "barcode", "quantity", "packaging", "ingredients_text"))
+
     async def generate_explanation(
         self,
         prompt: str,

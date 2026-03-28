@@ -25,6 +25,59 @@ def test_scoring_engine_is_deterministic() -> None:
     assert result_a.rule_triggers
 
 
+def test_scoring_engine_integrates_off_ecoscore_with_local_adjustments() -> None:
+    engine = ScoringEngine()
+    product = ProductData(
+        product_name="Chocolate Biscuits",
+        ingredients_text="wheat flour, cocoa, butter",
+        eco_ingredient_signals=[
+            {"id": "cocoa", "present": True, "impact_level": "medium_high"},
+            {"id": "butter", "present": True, "impact_level": "high"},
+            {"id": "palm_oil", "present": False, "impact_level": "high"},
+        ],
+        packaging="paper bag",
+        labels_tags=["en:no-palm-oil"],
+        categories_tags=["en:sweet-snacks", "en:biscuits"],
+        ecoscore_score=60,
+        ecoscore_grade="b",
+        ecoscore_data={
+            "missing": {"ingredients": 1, "packagings": 0, "origins": 0},
+            "adjustments": {"threatened_species": {"warning": "ingredients_missing"}},
+        },
+        co2e_kg_per_kg=2.1,
+        co2e_source="off_agribalyse",
+        confidence=0.8,
+    )
+
+    result = engine.compute_score(product)
+
+    assert result.official_score == 60
+    assert result.local_score is not None
+    assert result.score_source == "off_plus_local"
+    assert result.total_score != result.local_score
+    assert result.co2e_kg_per_kg == 2.1
+    assert result.co2e_source == "off_agribalyse"
+    assert any(trigger["code"] == "off_plus_local" for trigger in result.rule_triggers)
+
+
+def test_scoring_engine_prefers_off_ecoscore_when_no_local_completion_signal() -> None:
+    engine = ScoringEngine()
+    product = ProductData(
+        product_name="Generic Product",
+        categories_tags=["en:biscuits"],
+        ecoscore_score=44,
+        ecoscore_grade="d",
+        ecoscore_data={"missing": {"ingredients": 0, "packagings": 0, "origins": 0}},
+        confidence=0.8,
+    )
+
+    result = engine.compute_score(product)
+
+    assert result.total_score == 44
+    assert result.official_score == 44
+    assert result.score_source == "off_ecoscore"
+
+
 def test_scoring_engine_penalizes_ecological_hotspots() -> None:
     engine = ScoringEngine()
     product = ProductData(

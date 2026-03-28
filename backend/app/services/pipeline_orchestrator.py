@@ -10,6 +10,7 @@ from app.product import merge_product_data
 from app.schemas.pipeline import PipelineInput, PipelineOutput, ProductData, TraceStep
 from app.services.explainer import ScoreExplainer
 from app.services.extractor import ProductExtractor
+from app.services.impact_translator import ImpactTranslator
 from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.rag_service import RagService
@@ -27,6 +28,7 @@ class PipelineOrchestrator:
         scoring_engine: ScoringEngine,
         rag_service: RagService,
         explainer: ScoreExplainer,
+        impact_translator: ImpactTranslator,
     ) -> None:
         self.extractor = extractor
         self.normalizer = normalizer
@@ -34,6 +36,7 @@ class PipelineOrchestrator:
         self.scoring_engine = scoring_engine
         self.rag_service = rag_service
         self.explainer = explainer
+        self.impact_translator = impact_translator
         self._last_debug_payload: Dict[str, Any] = {}
 
     async def run_pipeline(self, pipeline_input: PipelineInput) -> PipelineOutput:
@@ -83,6 +86,37 @@ class PipelineOrchestrator:
                         metadata["found"] = bool(off_result.product)
                         if normalization_warnings:
                             metadata["normalization_warnings"] = normalization_warnings
+                        ingredients_image_url = (off_result.product or {}).get("image_ingredients_url")
+                        if (
+                            ingredients_image_url
+                            and not off_product.ingredients_text
+                        ):
+                            try:
+                                ingredients_product = await self.extractor.extract_remote_image_url(
+                                    ingredients_image_url,
+                                    barcode=pipeline_input.barcode,
+                                    user_notes="Focus on extracting ingredients_text from the ingredient panel image when visible.",
+                                )
+                                if ingredients_product.ingredients_text or ingredients_product.eco_ingredient_signals:
+                                    if ingredients_product.ingredients_text:
+                                        ingredients_product.field_provenance["ingredients_text"] = {
+                                            "source": "off_image_ai",
+                                            "confidence": ingredients_product.confidence,
+                                        }
+                                        ingredients_product.data_completeness["ingredients_text"] = True
+                                    if ingredients_product.eco_ingredient_signals:
+                                        ingredients_product.field_provenance["eco_ingredient_signals"] = {
+                                            "source": "off_image_ai",
+                                            "confidence": ingredients_product.confidence,
+                                        }
+                                        ingredients_product.data_completeness["eco_ingredient_signals"] = True
+                                    off_product = merge_product_data(off_product, ingredients_product)
+                                    metadata["ingredients_image_fallback"] = "used"
+                                    metadata["ingredients_image_url_present"] = True
+                                    metadata["ingredients_extracted"] = bool(ingredients_product.ingredients_text)
+                            except Exception as exc:
+                                metadata["ingredients_image_fallback"] = "failed"
+                                metadata["ingredients_image_error"] = str(exc)
                     else:
                         off_product = ProductData(
                             barcode=pipeline_input.barcode,
@@ -135,10 +169,26 @@ class PipelineOrchestrator:
                 product = off_product
             metadata["source"] = product.source
             metadata["confidence"] = product.confidence
+            metadata["data_completeness"] = product.data_completeness
+            metadata["field_provenance"] = {
+                key: value for key, value in product.field_provenance.items() if key in {
+                    "ingredients_text",
+                    "packaging",
+                    "origins",
+                    "ecoscore_score",
+                    "co2e_kg_per_kg",
+                }
+            }
 
         async with self._trace_step(trace, "score_product") as metadata:
             score = self.scoring_engine.compute_score(product)
             metadata["total_score"] = score.total_score
+            metadata["score_source"] = score.score_source
+            metadata["official_score"] = score.official_score
+            metadata["local_score"] = score.local_score
+            if score.co2e_kg_per_kg is not None:
+                metadata["co2e_kg_per_kg"] = score.co2e_kg_per_kg
+                metadata["co2e_source"] = score.co2e_source
 
         async with self._trace_step(trace, "generate_explanation") as metadata:
             explanation_short, explanation_bullets = await self.explainer.explain(
@@ -156,6 +206,17 @@ class PipelineOrchestrator:
             metadata.update(rag_trace)
             metadata["suggestion_count"] = len(rag_suggestions)
 
+        async with self._trace_step(trace, "translate_impact") as metadata:
+            impact_comparison = self.impact_translator.build_impact_comparison(product, rag_suggestions)
+            metadata["has_impact_comparison"] = impact_comparison is not None
+            if impact_comparison is not None:
+                metadata["candidate_barcode"] = impact_comparison.candidate_barcode
+                metadata["comparison_confidence"] = impact_comparison.comparison_confidence
+                if impact_comparison.co2e_delta_kg_per_kg is not None:
+                    metadata["co2e_delta_kg_per_kg"] = impact_comparison.co2e_delta_kg_per_kg
+                if impact_comparison.estimated_co2e_savings_per_pack_kg is not None:
+                    metadata["estimated_co2e_savings_per_pack_kg"] = impact_comparison.estimated_co2e_savings_per_pack_kg
+
         output = PipelineOutput(
             trace_id=trace_id,
             product=product,
@@ -163,6 +224,7 @@ class PipelineOrchestrator:
             explanation_short=explanation_short,
             explanation_bullets=explanation_bullets,
             rag_suggestions=rag_suggestions,
+            impact_comparison=impact_comparison,
             trace=trace,
         )
         self._last_debug_payload = {

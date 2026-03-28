@@ -8,6 +8,7 @@ from app.core.errors import AppError
 from app.schemas.pipeline import ProductData
 from app.services.embeddings_client import EmbeddingsClient
 from app.services.llm_client import LLMClient
+from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.rag_service import RagService
 
 
@@ -53,14 +54,35 @@ def test_rag_service_degrades_when_embeddings_are_offline(settings) -> None:
     from tests.conftest import FakeLLMClient
 
     class OfflineEmbeddingsClient(EmbeddingsClient):
-        async def embed_text(self, text: str) -> list[float]:
+        async def embed_texts(self, texts: list[str]) -> list[list[float]]:
             raise AppError("embeddings_request_failed", "offline", status_code=502)
 
-    rag_service = RagService(settings, OfflineEmbeddingsClient(settings), FakeLLMClient(settings))
-    collection = rag_service._get_collection()
-    collection.upsert(ids=["1"], embeddings=[[1.0, 1.0]], metadatas=[{"barcode": "1"}], documents=["doc"])
+    off_client = OpenFoodFactsClient(settings)
 
-    suggestions, trace = asyncio.run(rag_service.suggest_with_trace(ProductData(product_name="X"), user_query="alternative"))
+    async def fake_search_similar_products(product: ProductData, *, locale=None, limit=None) -> list[dict]:
+        del product, locale, limit
+        return []
 
-    assert suggestions == []
-    assert trace["warning"] == "embeddings_unavailable"
+    off_client.search_similar_products = fake_search_similar_products
+    rag_service = RagService(settings, OfflineEmbeddingsClient(settings), FakeLLMClient(settings), off_client)
+    (settings.off_data_dir / "candidate.json").write_text(
+        '{"status":1,"product":{"code":"1","product_name":"Biscotti Avena Integrali","ingredients_text":"oat flour, sunflower oil","categories_tags":["breakfasts"],"quantity":"250 g","ecoscore_score":80,"ecoscore_grade":"a"}}',
+        encoding="utf-8",
+    )
+
+    suggestions, trace = asyncio.run(
+        rag_service.suggest_with_trace(
+            ProductData(
+                barcode="0",
+                product_name="Biscotti Avena",
+                ingredients_text="oat flour, sugar, sunflower oil",
+                categories_tags=["breakfasts"],
+                quantity="250 g",
+                ecoscore_score=60,
+            ),
+            user_query="alternative",
+        )
+    )
+
+    assert suggestions
+    assert trace.get("warning") == "llm_rerank_unavailable" or "warning" not in trace

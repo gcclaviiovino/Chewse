@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Optional
 
 from app.core.errors import AppError
 from app.core.settings import Settings
@@ -28,6 +29,21 @@ class ProductExtractor:
             user_notes=pipeline_input.user_query,
         )
         return self.normalizer.normalize_llm_payload(llm_payload, barcode=pipeline_input.barcode)
+
+    async def extract_remote_image_url(
+        self,
+        image_url: str,
+        *,
+        barcode: Optional[str] = None,
+        user_notes: Optional[str] = None,
+    ) -> ProductData:
+        prompt = Path(self.prompt_path).read_text(encoding="utf-8")
+        llm_payload = await self.llm_client.extract_from_image_url(
+            image_url=image_url,
+            prompt=prompt,
+            user_notes=user_notes,
+        )
+        return self.normalizer.normalize_llm_payload(llm_payload, barcode=barcode)
 
     def _validate_image_path(self, image_path: str) -> None:
         candidate = Path(image_path).expanduser()

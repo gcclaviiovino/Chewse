@@ -1,6 +1,6 @@
 # Social Food AI Pipeline
 
-Local-first Python backend focused only on the LLM and retrieval pipeline for product understanding, deterministic scoring, explanation generation, and RAG suggestions.
+Local-first Python backend focused only on the LLM and retrieval pipeline for product understanding, deterministic scoring, explanation generation, and candidate-based product suggestions.
 
 ## Features
 
@@ -9,7 +9,8 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
 - Canonical `ProductData` normalization
 - Deterministic scoring engine decoupled from the LLM
 - Explanation generation with think and no-think passes
-- Local ChromaDB retrieval powered by `Qwen3-Embedding-8B`
+- Embedding-assisted candidate comparison and AI reranking for similar-product suggestions
+- Deterministic impact translation with explicit emissions deltas for frontend consumption
 - Minimal FastAPI endpoints for health, run, and reindex
 - Step-by-step trace with `trace_id`, structured step logs, and degraded-step warnings
 - Uniform API error envelopes: `error_code`, `message`, `details`, `trace_id`
@@ -43,7 +44,8 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
 - `OFF_MAX_RETRIES`, `OFF_BACKOFF_BASE_MS`, `OFF_RESPECT_RETRY_AFTER`: OFF retry controls
 - `OFF_CACHE_ENABLED`, `OFF_CACHE_TTL_SECONDS`, `OFF_CACHE_NOT_FOUND_TTL_SECONDS`: OFF barcode cache controls
 - `RETRY_BACKOFF_BASE_SECONDS`, `RETRY_JITTER_SECONDS`: retry timing controls
-- `RAG_TOP_K`, `RAG_SCORE_THRESHOLD`, `RAG_METADATA_FILTERS`: retrieval controls
+- `RAG_TOP_K`, `RAG_SCORE_THRESHOLD`, `RAG_METADATA_FILTERS`: suggestion output controls
+- `SIMILAR_PRODUCTS_CANDIDATE_LIMIT`, `SIMILAR_PRODUCTS_SHORTLIST_SIZE`, `SIMILAR_PRODUCTS_SIMILARITY_THRESHOLD`: candidate generation and deterministic filtering controls
 - `LLM_INPUT_MAX_CHARS`, `LLM_OUTPUT_MAX_CHARS`, `EXPLANATION_SHORT_MAX_CHARS`, `EXPLANATION_BULLET_MAX_CHARS`: prompt/output safety limits
 
 ## Reliability Behavior
@@ -60,10 +62,19 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
 - OFF locale hints are derived from the pipeline locale when available and sent as `lc` and `cc`.
 - OFF normalization is defensive for missing/null/wrong-type fields and records warnings in trace metadata.
 - OFF barcode cache is in-memory, keyed by barcode, can be disabled, and can cache short-lived `not_found` responses.
+- Similar-product suggestions no longer rely on generic text snippets alone. The pipeline now:
+  - gathers candidate products from the local OFF subset and OFF search when available
+  - filters candidates deterministically for category, ingredient, format, and quantity similarity
+  - reranks the shortlist with the LLM while keeping a deterministic fallback
+- When a better alternative is found, the pipeline also returns `impact_comparison` with:
+  - explicit emissions values for the base product and the selected alternative
+  - `co2e_delta_kg_per_kg`
+  - `estimated_co2e_savings_per_pack_kg` when quantity is comparable
+  - human-readable summaries and conservative equivalences for frontend display
 - The orchestrator degrades non-critical failures when possible:
   - Open Food Facts failure: pipeline can continue with image-only or query-only data.
-  - Missing or corrupt Chroma index: RAG returns empty suggestions and records a warning in trace.
-  - Embeddings or RAG generation failure: scoring and explanation still return when available.
+  - Missing or weak candidate pool: suggestions return empty and record a warning in trace.
+  - Embeddings or AI reranking failure: scoring and explanation still return, and suggestion generation falls back to deterministic ranking when possible.
 - Explanation output is normalized into three sections:
   - observed facts
   - assumptions
@@ -75,13 +86,18 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
 - Each trace step includes status, duration, metadata summary, and the propagated `trace_id`.
 - `GET /pipeline/debug/last` returns a redacted summary of the latest pipeline run only when `ENABLE_PIPELINE_DEBUG_LAST=true`.
 - OFF trace metadata includes cache hit/miss, retry count, locale hints, and degraded reason codes such as `off_not_found`, `off_rate_limited`, `off_http_error`, `off_parse_error`, and `off_retry_exhausted`.
+- Suggestion trace metadata includes local/remote candidate counts, filtered shortlist size, and warning states such as `candidate_pool_empty`, `no_similar_better_candidates`, or `llm_rerank_unavailable`.
+- Impact trace metadata includes whether a comparison was generated, the selected candidate barcode, and any computed emissions deltas.
 
 ## OFF Integration Notes
 
 - OFF data is best-effort only. The upstream docs explicitly note that product completeness and accuracy vary by item.
 - For this local MVP, OFF lookup is enrichment, not a hard dependency. Scoring still runs even if OFF returns not found, rate limits, transient HTTP failures, or malformed JSON.
+- When OFF already provides an Eco-Score, that remains the official environmental baseline. Local logic is used to enrich missing ingredients from OFF images, improve comparisons, and support fallback behavior.
 - Example degraded flow: barcode only request, OFF `429`, cached miss, retries exhausted. The pipeline still returns a valid `PipelineOutput` with an empty/partial `ProductData`, deterministic score, explanation, and an OFF trace step containing `off_rate_limited` and `off_retry_exhausted`.
 - Example degraded flow: barcode only request, OFF `200` + `status=0`. The pipeline returns a valid `PipelineOutput` and the OFF trace step records `off_not_found`.
+- Example comparison flow: a scanned biscuit gets OFF official Eco-Score plus recovered ingredient text from `image_ingredients_url`; candidate products are then filtered to similar biscuits with better Eco-Score before the LLM writes the final recommendation.
+- Example impact flow: if the chosen alternative has lower `co2e_kg_per_kg`, the backend exposes both raw emissions values and a derived per-pack estimate when the quantities are comparable.
 
 ## OFF Tests
 
@@ -97,9 +113,11 @@ pytest backend/tests/test_openfoodfacts_client.py backend/tests/test_normalizer.
   - Ensure the file exists and is inside one of `ALLOWED_IMAGE_ROOTS`.
 - `payload_too_large`:
   - Increase `MAX_REQUEST_BYTES` only if the local deployment actually needs it.
-- Empty RAG suggestions with a warning in trace:
-  - Rebuild the local Chroma index with `POST /pipeline/reindex`.
-  - Check embeddings availability and `RAG_SCORE_THRESHOLD`.
+- Empty product suggestions with a warning in trace:
+  - Rebuild or refresh the local OFF subset with `POST /pipeline/reindex`.
+  - Check embeddings availability and `SIMILAR_PRODUCTS_SIMILARITY_THRESHOLD`.
+- Missing `impact_comparison`:
+  - This usually means no better similar candidate was found, or the candidate lacks enough emissions data for a strong comparison.
 - Frequent remote retries or `*_request_failed` errors:
   - Verify the configured base URLs, auth headers, and local network access to the configured services.
 - OFF rate limiting:

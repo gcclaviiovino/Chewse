@@ -72,6 +72,13 @@ class ProductData(BaseModel):
     barcode: Optional[str] = None
     ingredients_text: Optional[str] = None
     eco_ingredient_signals: List[Dict[str, Any]] = Field(default_factory=list)
+    ecoscore_score: Optional[int] = None
+    ecoscore_grade: Optional[str] = None
+    ecoscore_data: Dict[str, Any] = Field(default_factory=dict)
+    co2e_kg_per_kg: Optional[float] = None
+    co2e_source: Optional[str] = None
+    field_provenance: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+    data_completeness: Dict[str, bool] = Field(default_factory=dict)
     nutriments: Dict[str, Optional[Any]] = Field(default_factory=dict)
     packaging: Optional[str] = None
     origins: Optional[str] = None
@@ -84,6 +91,11 @@ class ProductData(BaseModel):
 
 class ScoreResult(BaseModel):
     total_score: int = 0
+    official_score: Optional[int] = None
+    local_score: Optional[int] = None
+    score_source: Literal["off_ecoscore", "off_plus_local", "local_fallback"] = "local_fallback"
+    co2e_kg_per_kg: Optional[float] = None
+    co2e_source: Optional[str] = None
     subscores: Dict[str, int] = Field(default_factory=dict)
     flags: List[str] = Field(default_factory=list)
     deterministic_reasons: List[str] = Field(default_factory=list)
@@ -95,6 +107,39 @@ class RagSuggestion(BaseModel):
     suggestion: str
     rationale: str
     sources: List[str] = Field(default_factory=list)
+    candidate_barcode: Optional[str] = None
+    candidate_product_name: Optional[str] = None
+    candidate_brand: Optional[str] = None
+    candidate_ecoscore_score: Optional[int] = None
+    candidate_ecoscore_grade: Optional[str] = None
+    candidate_co2e_kg_per_kg: Optional[float] = None
+    similarity_score: Optional[float] = None
+    eco_improvement_score: Optional[float] = None
+    final_rank_score: Optional[float] = None
+    comparison_confidence: Optional[float] = None
+
+
+class ImpactEquivalent(BaseModel):
+    type: str
+    label: str
+    value: Optional[float] = None
+    unit: Optional[str] = None
+    confidence: Literal["low", "medium", "high"] = "medium"
+
+
+class ImpactComparison(BaseModel):
+    base_product_barcode: Optional[str] = None
+    base_product_name: Optional[str] = None
+    candidate_barcode: Optional[str] = None
+    candidate_product_name: Optional[str] = None
+    base_co2e_kg_per_kg: Optional[float] = None
+    candidate_co2e_kg_per_kg: Optional[float] = None
+    co2e_delta_kg_per_kg: Optional[float] = None
+    estimated_co2e_savings_per_pack_kg: Optional[float] = None
+    emissions_source: Optional[str] = None
+    improvement_summary: List[str] = Field(default_factory=list)
+    impact_equivalents: List[ImpactEquivalent] = Field(default_factory=list)
+    comparison_confidence: float = 0.0
 
 
 class TraceStep(BaseModel):
@@ -113,4 +158,5 @@ class PipelineOutput(BaseModel):
     explanation_short: str
     explanation_bullets: List[str] = Field(default_factory=list)
     rag_suggestions: List[RagSuggestion] = Field(default_factory=list)
+    impact_comparison: Optional[ImpactComparison] = None
     trace: List[TraceStep] = Field(default_factory=list)

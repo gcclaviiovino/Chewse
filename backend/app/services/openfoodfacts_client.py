@@ -12,6 +12,7 @@ from typing import Any, Dict, Literal, Optional
 import httpx
 
 from app.core.settings import Settings
+from app.schemas.pipeline import ProductData
 
 OpenFoodFactsStatus = Literal["ok", "not_found", "rate_limited", "error", "parse_error"]
 
@@ -207,6 +208,57 @@ class OpenFoodFactsClient:
                 self._store_cache(cache_key, result)
                 return result
 
+    async def search_similar_products(
+        self,
+        product: ProductData,
+        *,
+        locale: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> list[Dict[str, Any]]:
+        params = self._build_search_query(product, locale=locale, limit=limit)
+        if not params:
+            return []
+
+        retry_count = 0
+        async with httpx.AsyncClient(timeout=self._build_timeout()) as client:
+            while True:
+                try:
+                    response = await client.get(
+                        self._build_search_url(),
+                        headers=self._build_headers(),
+                        params=params,
+                    )
+                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException):
+                    if retry_count >= self.settings.off_max_retries:
+                        return []
+                    await self._sleep_before_retry(retry_count)
+                    retry_count += 1
+                    continue
+
+                if response.status_code == 429:
+                    if retry_count >= self.settings.off_max_retries:
+                        return []
+                    await self._sleep_before_retry(retry_count, response=response)
+                    retry_count += 1
+                    continue
+
+                if 500 <= response.status_code <= 599:
+                    if retry_count >= self.settings.off_max_retries:
+                        return []
+                    await self._sleep_before_retry(retry_count)
+                    retry_count += 1
+                    continue
+
+                if response.status_code != 200:
+                    return []
+
+                try:
+                    payload = response.json()
+                except (json.JSONDecodeError, ValueError):
+                    return []
+
+                return self._extract_search_products(payload)
+
     def _build_timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
             connect=self.settings.off_timeout_connect_seconds,
@@ -241,6 +293,67 @@ class OpenFoodFactsClient:
 
     def _build_product_url(self, barcode: str) -> str:
         return "{}/product/{}.json".format(self.settings.off_base_url.rstrip("/"), barcode)
+
+    def _build_search_url(self) -> str:
+        return "{}/search".format(self.settings.off_base_url.rstrip("/"))
+
+    def _build_search_query(
+        self,
+        product: ProductData,
+        *,
+        locale: Optional[str],
+        limit: Optional[int],
+    ) -> Dict[str, str]:
+        params = self._build_query_params(locale)
+        page_size = max(1, limit or self.settings.similar_products_candidate_limit)
+        params.update(
+            {
+                "page_size": str(page_size),
+                "fields": ",".join(
+                    [
+                        "code",
+                        "product_name",
+                        "brands",
+                        "ingredients_text",
+                        "packaging",
+                        "origins",
+                        "labels_tags",
+                        "categories_tags",
+                        "quantity",
+                        "ecoscore_score",
+                        "ecoscore_grade",
+                        "ecoscore_data",
+                        "image_ingredients_url",
+                    ]
+                ),
+            }
+        )
+
+        category_names = [self._humanize_tag(tag) for tag in product.categories_tags if self._humanize_tag(tag)]
+        if category_names:
+            params["categories_tags_en"] = category_names[0]
+        else:
+            product_name = (product.product_name or "").strip()
+            if product_name:
+                params["product_name"] = product_name
+        return params
+
+    @staticmethod
+    def _extract_search_products(payload: Any) -> list[Dict[str, Any]]:
+        if not isinstance(payload, dict):
+            return []
+        products = payload.get("products")
+        if not isinstance(products, list):
+            return []
+        return [item for item in products if isinstance(item, dict)]
+
+    @staticmethod
+    def _humanize_tag(value: str) -> str:
+        normalized = str(value or "").strip().lower()
+        if ":" in normalized:
+            normalized = normalized.split(":", 1)[1]
+        normalized = normalized.replace("_", " ").replace("-", " ").strip()
+        return normalized
 
     def _result_from_payload(
         self,

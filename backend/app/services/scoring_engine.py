@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from typing import Dict, List, Optional
 
 from app.schemas.pipeline import ProductData, ScoreResult
@@ -97,22 +96,90 @@ class ScoringEngine:
             "origins": origins_score,
         }
 
-        total = 0
+        local_total = 0
         for key, value in subscores.items():
-            total += int((value / 100) * self.weights[key])
+            local_total += int((value / 100) * self.weights[key])
 
         if product.confidence < 0.4:
             flags.append("low_confidence_product_data")
             reasons.append("Product data confidence is low, so ecological conclusions are less reliable.")
             rule_triggers.append(self._rule("low_confidence_product_data", "confidence", 0, "Product data confidence is below 0.4."))
 
+        official_score = product.ecoscore_score
+        total_score = max(0, min(local_total, 100))
+        score_source: str = "local_fallback"
+
+        if official_score is not None:
+            local_weight = self._local_integration_weight(product)
+            if local_weight > 0:
+                total_score = round((official_score * (1 - local_weight)) + (local_total * local_weight))
+                score_source = "off_plus_local"
+                reasons.append("Open Food Facts Eco-Score is the primary score, adjusted with locally recovered ecological data.")
+                rule_triggers.append(
+                    self._rule(
+                        "off_plus_local",
+                        "score",
+                        total_score - official_score,
+                        "OFF Eco-Score is integrated with locally recovered ecological signals.",
+                    )
+                )
+            else:
+                total_score = official_score
+                score_source = "off_ecoscore"
+                reasons.append("Open Food Facts Eco-Score is used as the primary environmental score.")
+                rule_triggers.append(
+                    self._rule(
+                        "off_ecoscore",
+                        "score",
+                        0,
+                        "Open Food Facts Eco-Score is used as the primary environmental score.",
+                    )
+                )
+
         return ScoreResult(
-            total_score=max(0, min(total, 100)),
+            total_score=max(0, min(total_score, 100)),
+            official_score=official_score,
+            local_score=max(0, min(local_total, 100)),
+            score_source=score_source,
+            co2e_kg_per_kg=product.co2e_kg_per_kg,
+            co2e_source=product.co2e_source,
             subscores=subscores,
             flags=sorted(set(flags)),
             deterministic_reasons=reasons,
             rule_triggers=rule_triggers,
         )
+
+    def _local_integration_weight(self, product: ProductData) -> float:
+        if product.ecoscore_score is None:
+            return 0.0
+        if not product.ecoscore_data:
+            return 0.25
+
+        weight = 0.0
+        missing = product.ecoscore_data.get("missing")
+        if isinstance(missing, dict):
+            if missing.get("ingredients") and (product.ingredients_text or product.eco_ingredient_signals):
+                weight += 0.2
+            if missing.get("packagings") and product.packaging:
+                weight += 0.1
+            if missing.get("origins") and product.origins:
+                weight += 0.1
+
+        adjustments = product.ecoscore_data.get("adjustments")
+        if isinstance(adjustments, dict):
+            packaging_adjustment = adjustments.get("packaging")
+            if isinstance(packaging_adjustment, dict) and packaging_adjustment.get("warning") == "packaging_data_missing" and product.packaging:
+                weight = max(weight, 0.1)
+
+            threatened_species = adjustments.get("threatened_species")
+            if isinstance(threatened_species, dict) and threatened_species.get("warning") == "ingredients_missing" and (product.ingredients_text or product.eco_ingredient_signals):
+                weight = max(weight, 0.2)
+
+            origins_adjustment = adjustments.get("origins_of_ingredients")
+            if isinstance(origins_adjustment, dict) and origins_adjustment.get("warning") == "origins_are_100_percent_unknown" and product.origins:
+                weight = max(weight, 0.1)
+
+        return min(weight, 0.45)
 
     def _score_category_baseline(
         self,
@@ -314,22 +381,6 @@ class ScoringEngine:
             triggers.append(self._rule("broad_origin", "origins", -10, "Broad or mixed origin information reduces the origins subscore."))
 
         return max(0, min(score, 100))
-
-    @staticmethod
-    def _as_float(value: object) -> Optional[float]:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            match = re.search(r"[-+]?\d+(?:[.,]\d+)?", value)
-            if not match:
-                return None
-            try:
-                return float(match.group(0).replace(",", "."))
-            except ValueError:
-                return None
-        return None
 
     @staticmethod
     def _rule(code: str, category: str, impact: int, message: str) -> Dict[str, object]:

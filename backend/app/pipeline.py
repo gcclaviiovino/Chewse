@@ -7,6 +7,7 @@ from app.schemas.pipeline import PipelineInput, PipelineOutput
 from app.services.embeddings_client import EmbeddingsClient
 from app.services.explainer import ScoreExplainer
 from app.services.extractor import ProductExtractor
+from app.services.impact_translator import ImpactTranslator
 from app.services.llm_client import LLMClient
 from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
@@ -24,9 +25,10 @@ def build_orchestrator() -> PipelineOrchestrator:
     extractor = ProductExtractor(settings, llm_client, normalizer)
     off_client = OpenFoodFactsClient(settings)
     scoring_engine = ScoringEngine()
-    rag_service = RagService(settings, embeddings_client, llm_client)
+    rag_service = RagService(settings, embeddings_client, llm_client, off_client)
     explainer = ScoreExplainer(settings, llm_client)
-    return PipelineOrchestrator(extractor, normalizer, off_client, scoring_engine, rag_service, explainer)
+    impact_translator = ImpactTranslator()
+    return PipelineOrchestrator(extractor, normalizer, off_client, scoring_engine, rag_service, explainer, impact_translator)
 
 
 async def run_pipeline(input: PipelineInput) -> PipelineOutput:

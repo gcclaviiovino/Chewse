@@ -12,6 +12,7 @@ from app.schemas.pipeline import ProductData
 from app.services.embeddings_client import EmbeddingsClient
 from app.services.explainer import ScoreExplainer
 from app.services.extractor import ProductExtractor
+from app.services.impact_translator import ImpactTranslator
 from app.services.llm_client import LLMClient
 from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
@@ -32,6 +33,12 @@ class FakeLLMClient(LLMClient):
             "categories_tags": ["snacks"],
             "quantity": "200g",
             "confidence": 0.72,
+        }
+
+    async def extract_from_image_url(self, image_url: str, prompt: str, user_notes: Optional[str] = None) -> dict:
+        return {
+            "ingredients_text": "whole wheat flour, olive oil, salt",
+            "confidence": 0.61,
         }
 
     async def generate_explanation(self, prompt: str, product_payload: dict, score_payload: dict, mode: str = "no_think") -> dict:
@@ -103,10 +110,14 @@ def orchestrator(settings: Settings) -> PipelineOrchestrator:
     llm_client = FakeLLMClient(settings)
     extractor = ProductExtractor(settings, llm_client, normalizer)
     off_client = OpenFoodFactsClient(settings)
+    async def fake_search_similar_products(product: ProductData, *, locale: Optional[str] = None, limit: Optional[int] = None) -> list[dict]:
+        return []
+    off_client.search_similar_products = fake_search_similar_products
     scoring_engine = ScoringEngine()
-    rag_service = RagService(settings, FakeEmbeddingsClient(settings), llm_client)
+    rag_service = RagService(settings, FakeEmbeddingsClient(settings), llm_client, off_client)
     explainer = ScoreExplainer(settings, llm_client)
-    return PipelineOrchestrator(extractor, normalizer, off_client, scoring_engine, rag_service, explainer)
+    impact_translator = ImpactTranslator()
+    return PipelineOrchestrator(extractor, normalizer, off_client, scoring_engine, rag_service, explainer, impact_translator)
 
 
 @pytest.fixture
@@ -124,6 +135,14 @@ def sample_off_payload() -> dict:
             "labels_tags": ["organic"],
             "categories_tags": ["breakfasts"],
             "quantity": "250 g",
+            "ecoscore_score": 62,
+            "ecoscore_grade": "b",
+            "ecoscore_data": {
+                "score": 62,
+                "grade": "b",
+                "missing": {"ingredients": 0, "origins": 0, "packagings": 0},
+                "agribalyse": {"co2_total": 1.73},
+            },
         },
     }
 

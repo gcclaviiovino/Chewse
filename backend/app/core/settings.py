@@ -113,6 +113,15 @@ class Settings(BaseModel):
     rag_top_k: int = Field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "3")))
     rag_score_threshold: float = Field(default_factory=lambda: float(os.getenv("RAG_SCORE_THRESHOLD", "0.35")))
     rag_metadata_filters_raw: str = Field(default_factory=lambda: os.getenv("RAG_METADATA_FILTERS", ""))
+    similar_products_candidate_limit: int = Field(
+        default_factory=lambda: int(os.getenv("SIMILAR_PRODUCTS_CANDIDATE_LIMIT", "20"))
+    )
+    similar_products_shortlist_size: int = Field(
+        default_factory=lambda: int(os.getenv("SIMILAR_PRODUCTS_SHORTLIST_SIZE", "5"))
+    )
+    similar_products_similarity_threshold: float = Field(
+        default_factory=lambda: float(os.getenv("SIMILAR_PRODUCTS_SIMILARITY_THRESHOLD", "0.35"))
+    )
     llm_input_max_chars: int = Field(default_factory=lambda: int(os.getenv("LLM_INPUT_MAX_CHARS", "4000")))
     llm_output_max_chars: int = Field(default_factory=lambda: int(os.getenv("LLM_OUTPUT_MAX_CHARS", "12000")))
     explanation_short_max_chars: int = Field(default_factory=lambda: int(os.getenv("EXPLANATION_SHORT_MAX_CHARS", "320")))

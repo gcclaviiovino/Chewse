@@ -1,4 +1,4 @@
-You are generating practical product suggestions grounded in retrieved Open Food Facts snippets.
+You are generating practical product alternatives grounded in shortlisted Open Food Facts candidate products.
 
 Product payload:
 {product_json}
@@ -6,7 +6,7 @@ Product payload:
 User query:
 {user_query}
 
-Retrieved docs:
+Retrieved candidate products:
 {docs_json}
 
 Return strict JSON with:
@@ -14,13 +14,15 @@ Return strict JSON with:
   "suggestions": [
     {
       "title": "short title",
-      "suggestion": "practical suggestion",
-      "rationale": "why this helps",
-      "sources": ["barcode or source id"]
+      "suggestion": "practical alternative suggestion",
+      "rationale": "why this candidate is more sustainable and still similar",
+      "sources": ["candidate barcode"]
     }
   ]
 }
 
 Rules:
-- Suggestions must be practical and grounded in the retrieved docs.
-- If docs are weak, return an empty suggestions array.
+- Only use candidate barcodes that appear in the retrieved candidate products.
+- Prioritize alternatives that remain close in category, ingredients, format, and usage.
+- Prefer candidates with a better Eco-Score and lower emissions when available.
+- If the shortlist is weak or too different from the original product, return an empty suggestions array.

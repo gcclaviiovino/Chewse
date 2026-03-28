@@ -109,3 +109,35 @@ def test_normalizer_extracts_structured_eco_ingredient_signals() -> None:
     assert "palm_oil" in signal_ids
     palm_signal = next(item for item in product.eco_ingredient_signals if item["id"] == "palm_oil")
     assert palm_signal["present"] is False
+
+
+def test_normalizer_maps_off_ecoscore_and_emissions() -> None:
+    normalizer = ProductNormalizer()
+
+    product = normalizer.normalize_off_payload(
+        {
+            "status": 1,
+            "product": {
+                "code": "555",
+                "product_name": "Eco Product",
+                "ecoscore_score": 58,
+                "ecoscore_grade": "c",
+                "ecoscore_data": {
+                    "score": 58,
+                    "grade": "c",
+                    "agribalyse": {"co2_total": 2.34},
+                },
+            },
+        },
+        barcode="555",
+    )
+
+    assert product.ecoscore_score == 58
+    assert product.ecoscore_grade == "c"
+    assert product.ecoscore_data["score"] == 58
+    assert product.co2e_kg_per_kg == 2.34
+    assert product.co2e_source == "off_agribalyse"
+    assert product.field_provenance["ecoscore_score"]["source"] == "openfoodfacts"
+    assert product.field_provenance["co2e_kg_per_kg"]["source"] == "openfoodfacts"
+    assert product.data_completeness["ecoscore_score"] is True
+    assert product.data_completeness["ingredients_text"] is False
