@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700;800&display=swap');
+@import 'tailwindcss';
+
+:root {
+  font-family: 'Outfit', sans-serif;
+  --color-primary: #05668d;
+  --color-secondary: #427aa1;
+  --color-cream: #fff9dc;
+  --color-green: #679436;
+  --color-lime: #a5be00;
+}
+
+body {
+  margin: 0;
+}
+
+@keyframes pop {
+  0% {
+    transform: scale(0.8);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-pop {
+  animation: pop 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
