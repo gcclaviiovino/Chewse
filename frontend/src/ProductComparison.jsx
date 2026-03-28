@@ -10,7 +10,7 @@ const ProductComparison = () => {
 
   const handleChooseProduct = (chosenProduct) => {
     // Mock points for now (will be implemented later)
-    const pointsGathered = 50
+    const pointsGathered = product.product_score
     navigate('/success', { 
       state: { 
         chosenProduct,

@@ -9,14 +9,16 @@ const ChoicePage = () => {
   const comparison = location.state?.comparison
 
   const handleSave = () => {
-    // TODO: Implement save product logic
-    const productToSave = {
-      ...selectedAlternative,
-      baseProduct,
-      comparison
-    }
-    console.log('Save alternative:', productToSave)
-    navigate('/success', { state: { accepted: true } })
+    // Calculate points based on selected alternative score
+    const pointsGathered = selectedAlternative.product_score || 50
+    navigate('/success', { 
+      state: { 
+        chosenProduct: selectedAlternative,
+        pointsGathered,
+        baseProduct,
+        comparison
+      } 
+    })
   }
 
   const handleDiscard = () => {
