@@ -7,6 +7,7 @@ const ProductResult = () => {
   const location = useLocation()
 
   const productData = location.state?.product
+  const subscores = Object.entries(productData?.subscores || {})
 
   // Auto-navigate after 2 seconds
   useEffect(() => {
@@ -61,6 +62,25 @@ const ProductResult = () => {
           <p className="rounded-2xl border border-[var(--color-green)] bg-white/80 p-4 text-sm text-[var(--color-primary)]">
             {productData.explanation_short}
           </p>
+        )}
+        {subscores.length > 0 && (
+          <section className="mt-4 rounded-2xl border border-[var(--color-green)] bg-white/80 p-4">
+            <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-green)]">
+              Subscore
+            </p>
+            <div className="space-y-2">
+              {subscores.map(([key, value]) => (
+                <div key={key} className="flex items-center justify-between rounded-xl bg-[var(--color-cream)] px-3 py-2 text-sm">
+                  <span className="capitalize text-[var(--color-primary)]">
+                    {key.replaceAll('_', ' ')}
+                  </span>
+                  <span className="font-semibold text-[var(--color-green)]">
+                    {value}/100
+                  </span>
+                </div>
+              ))}
+            </div>
+          </section>
         )}
       </div>
     </main>

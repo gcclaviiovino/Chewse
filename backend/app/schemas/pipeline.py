@@ -160,3 +160,17 @@ class PipelineOutput(BaseModel):
     rag_suggestions: List[RagSuggestion] = Field(default_factory=list)
     impact_comparison: Optional[ImpactComparison] = None
     trace: List[TraceStep] = Field(default_factory=list)
+
+
+class UploadPhotoResponse(BaseModel):
+    trace_id: Optional[str] = None
+    name: str
+    product_type: str
+    product_score: int
+    max_score: int = 100
+    explanation_short: str
+    official_score: Optional[int] = None
+    local_score: Optional[int] = None
+    score_source: Literal["off_ecoscore", "off_plus_local", "local_fallback"] = "local_fallback"
+    subscores: Dict[str, int] = Field(default_factory=dict)
+    flags: List[str] = Field(default_factory=list)

@@ -86,3 +86,7 @@ def test_upload_photo_endpoint_accepts_base64(api_client) -> None:
     assert payload["trace_id"]
     assert payload["name"]
     assert 0 <= payload["product_score"] <= payload["max_score"]
+    assert isinstance(payload["subscores"], dict)
+    assert payload["subscores"]
+    assert "ingredients" in payload["subscores"]
+    assert payload["score_source"] in {"off_ecoscore", "off_plus_local", "local_fallback"}

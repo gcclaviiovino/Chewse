@@ -19,7 +19,7 @@ from app.core.logger import configure_logging
 from app.core.observability import generate_trace_id, get_trace_id, log_event, redact_data, safe_debug_trace, set_trace_id
 from app.core.settings import get_settings
 from app.pipeline import build_orchestrator
-from app.schemas.pipeline import PipelineInput, PipelineOutput
+from app.schemas.pipeline import PipelineInput, PipelineOutput, UploadPhotoResponse
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -183,8 +183,8 @@ async def pipeline_run(payload: PipelineInput) -> PipelineOutput:
     return await orchestrator.run_pipeline(payload)
 
 
-@app.post("/api/upload-photo")
-async def upload_photo(payload: UploadPhotoRequest) -> dict:
+@app.post("/api/upload-photo", response_model=UploadPhotoResponse)
+async def upload_photo(payload: UploadPhotoRequest) -> UploadPhotoResponse:
     mode = payload.mode if payload.mode in {"fast", "deep"} else "fast"
 
     encoded = _extract_base64_data(payload.image)
@@ -218,14 +218,19 @@ async def upload_photo(payload: UploadPhotoRequest) -> dict:
     )
     output = await build_orchestrator().run_pipeline(pipeline_input)
 
-    return {
-        "trace_id": output.trace_id,
-        "name": output.product.product_name or "Prodotto sconosciuto",
-        "product_type": _infer_product_type(output.product.product_name),
-        "product_score": output.score.total_score,
-        "max_score": 100,
-        "explanation_short": output.explanation_short,
-    }
+    return UploadPhotoResponse(
+        trace_id=output.trace_id,
+        name=output.product.product_name or "Prodotto sconosciuto",
+        product_type=_infer_product_type(output.product.product_name),
+        product_score=output.score.total_score,
+        max_score=100,
+        explanation_short=output.explanation_short,
+        official_score=output.score.official_score,
+        local_score=output.score.local_score,
+        score_source=output.score.score_source,
+        subscores=output.score.subscores,
+        flags=output.score.flags,
+    )
 
 
 @app.post("/pipeline/reindex")
