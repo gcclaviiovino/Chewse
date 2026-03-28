@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import random
-from typing import Any, Awaitable, Callable, Iterable, Type
+from typing import Any, Awaitable, Callable, Iterable, Optional, Type
 
 
 async def async_retry(
@@ -14,7 +14,7 @@ async def async_retry(
     retry_on: Iterable[Type[BaseException]],
 ) -> Any:
     retryable = tuple(retry_on)
-    last_error: BaseException | None = None
+    last_error: Optional[BaseException] = None
     for attempt in range(1, max(1, attempts) + 1):
         try:
             return await operation()

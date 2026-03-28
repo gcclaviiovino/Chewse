@@ -5,6 +5,7 @@ import binascii
 import logging
 from pathlib import Path
 from uuid import uuid4
+from typing import Optional
 
 from fastapi.encoders import jsonable_encoder
 from fastapi import FastAPI, Request
@@ -36,7 +37,7 @@ class UploadPhotoRequest(BaseModel):
     image: str = Field(min_length=20)
     mode: str = Field(default="fast")
     locale: str = Field(default="it-IT")
-    user_query: str | None = None
+    user_query: Optional[str] = None
 
 
 def _extract_base64_data(image_payload: str) -> str:
@@ -52,7 +53,7 @@ def _extract_base64_data(image_payload: str) -> str:
     return image_payload.strip()
 
 
-def _infer_product_type(product_name: str | None) -> str:
+def _infer_product_type(product_name: Optional[str]) -> str:
     name = (product_name or "").lower()
     if "banana" in name:
         return "banana"
