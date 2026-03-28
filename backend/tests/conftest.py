@@ -163,6 +163,7 @@ def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
     from app.services.alternatives_service import AlternativesService
     from app.services.impact_translator import ImpactTranslator
     from app.services.preferences_evaluator import PreferencesEvaluator
+    from app.services.preferences_memory import PreferencesMemoryService
 
     build_orchestrator.cache_clear()
     monkeypatch.setattr(app_main, "settings", settings)
@@ -174,6 +175,7 @@ def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
             orchestrator=orchestrator,
             preferences_evaluator=PreferencesEvaluator(),
             impact_translator=ImpactTranslator(),
+            preferences_memory=PreferencesMemoryService(settings.off_data_dir.parent),
         ),
     )
     with TestClient(app) as client:

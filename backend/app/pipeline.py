@@ -14,6 +14,7 @@ from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.pipeline_orchestrator import PipelineOrchestrator
 from app.services.preferences_evaluator import PreferencesEvaluator
+from app.services.preferences_memory import PreferencesMemoryService
 from app.services.rag_service import RagService
 from app.services.scoring_engine import ScoringEngine
 
@@ -39,9 +40,11 @@ async def run_pipeline(input: PipelineInput) -> PipelineOutput:
 
 
 def build_alternatives_service() -> AlternativesService:
+    settings = get_settings()
     orchestrator = build_orchestrator()
     return AlternativesService(
         orchestrator=orchestrator,
         preferences_evaluator=PreferencesEvaluator(),
         impact_translator=ImpactTranslator(),
+        preferences_memory=PreferencesMemoryService(settings.backend_dir),
     )

@@ -57,6 +57,8 @@ def test_alternatives_endpoint_prefers_candidates_matching_preferences(api_clien
     assert payload["selected_candidate"]["is_preference_compatible"] is True
     assert payload["requires_disclaimer"] is False
     assert payload["impact_comparison"]["candidate_barcode"] == "9999999999991"
+    assert payload["preference_source"] == "inline_markdown"
+    assert payload["needs_preference_input"] is False
 
 
 def test_alternatives_endpoint_falls_back_with_disclaimer_when_no_candidate_matches(api_client, settings, sample_off_payload) -> None:
@@ -97,3 +99,58 @@ def test_alternatives_endpoint_falls_back_with_disclaimer_when_no_candidate_matc
     assert len(payload["candidates"]) == 3
     assert all(candidate["requires_disclaimer"] is True for candidate in payload["candidates"])
     assert all(candidate["is_preference_compatible"] is False for candidate in payload["candidates"])
+
+
+def test_alternatives_endpoint_asks_preferences_when_memory_missing(api_client, settings, sample_off_payload) -> None:
+    base_barcode = sample_off_payload["product"]["code"]
+    (settings.off_data_dir / "{}.json".format(base_barcode)).write_text(json.dumps(sample_off_payload), encoding="utf-8")
+
+    response = api_client.post(
+        "/alternatives/from-barcode",
+        json={
+            "barcode": base_barcode,
+            "locale": "it-IT",
+            "user_id": "missing-memory-user",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preference_source"] == "none"
+    assert payload["needs_preference_input"] is True
+    assert payload["assistant_message"]
+    assert "preferenze" in payload["assistant_message"].lower()
+
+
+def test_alternatives_endpoint_reuses_memory_after_user_message(api_client, settings, sample_off_payload) -> None:
+    base_barcode = sample_off_payload["product"]["code"]
+    (settings.off_data_dir / "{}.json".format(base_barcode)).write_text(json.dumps(sample_off_payload), encoding="utf-8")
+
+    first = api_client.post(
+        "/alternatives/from-barcode",
+        json={
+            "barcode": base_barcode,
+            "locale": "it-IT",
+            "user_id": "alice",
+            "user_message": "Per i biscotti sono vegana e intollerante al lattosio",
+        },
+    )
+    assert first.status_code == 200
+    first_payload = first.json()
+    assert first_payload["preference_source"] == "user_message_extracted"
+    assert first_payload["applied_preferences_markdown"]
+    assert first_payload["needs_preference_input"] is False
+
+    second = api_client.post(
+        "/alternatives/from-barcode",
+        json={
+            "barcode": base_barcode,
+            "locale": "it-IT",
+            "user_id": "alice",
+        },
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["preference_source"] == "memory_markdown"
+    assert second_payload["applied_preferences_markdown"]
+    assert second_payload["needs_preference_input"] is False

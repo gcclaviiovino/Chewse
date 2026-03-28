@@ -184,6 +184,8 @@ class AlternativesRequest(BaseModel):
     barcode: str
     locale: str = "it-IT"
     user_query: Optional[str] = None
+    user_id: Optional[str] = None
+    user_message: Optional[str] = None
     preferences_markdown: Optional[str] = None
 
 
@@ -201,4 +203,8 @@ class AlternativesResponse(BaseModel):
     selected_candidate: Optional[AlternativeCandidate] = None
     impact_comparison: Optional[ImpactComparison] = None
     requires_disclaimer: bool = False
-    preference_source: Literal["none", "inline_markdown"] = "none"
+    preference_source: Literal["none", "inline_markdown", "memory_markdown", "user_message_extracted"] = "none"
+    preference_category: Optional[str] = None
+    applied_preferences_markdown: Optional[str] = None
+    needs_preference_input: bool = False
+    assistant_message: Optional[str] = None

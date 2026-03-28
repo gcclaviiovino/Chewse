@@ -67,7 +67,9 @@ Local-first Python backend focused only on the LLM and retrieval pipeline for pr
   - gathers candidate products from the local OFF subset and OFF search when available
   - filters candidates deterministically for category, ingredient, format, and quantity similarity
   - reranks the shortlist with the LLM while keeping a deterministic fallback
-- `POST /alternatives/from-barcode` wraps the pipeline result and evaluates the candidate shortlist against user preferences supplied as inline markdown.
+- `POST /alternatives/from-barcode` wraps the pipeline result, evaluates the candidate shortlist against user preferences, and can persist category-level preferences in local markdown memory (`backend/data/agent_memory/{user_id}.md`).
+- The endpoint supports three preference inputs in priority order: `preferences_markdown` (inline), `user_message` (extracted to preferences), and memory fallback by `user_id` + product category.
+- When no preference memory exists for that category, the response sets `needs_preference_input=true` and returns an `assistant_message` that can be shown by the frontend chat.
 - If no candidate matches the stated preferences, the endpoint still returns up to 3 strong candidates with `requires_disclaimer=true` so the frontend can show a disclaimer instead of hiding the options.
 - When a better alternative is found, the pipeline also returns `impact_comparison` with:
   - explicit emissions values for the base product and the selected alternative
@@ -131,6 +133,7 @@ pytest backend/tests/test_openfoodfacts_client.py backend/tests/test_normalizer.
 ## Regolo.ai config
 
 Regolo docs show bearer auth plus OpenAI-style endpoints. This backend is aligned to:
+
 - `POST /v1/chat/completions`
 - `POST /v1/embeddings`
 - `GET /v1/models` for health probing
