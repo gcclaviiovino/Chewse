@@ -25,6 +25,10 @@ def merge_product_data(primary: ProductData, secondary: Optional[ProductData]) -
             merged_nutriments.update(current or {})
             merged_payload[field_name] = merged_nutriments
             continue
+        if field_name == "eco_ingredient_signals":
+            merged_signals = _merge_eco_signals(current or [], value or [])
+            merged_payload[field_name] = merged_signals
+            continue
         if field_name in {"labels_tags", "categories_tags"}:
             merged_payload[field_name] = sorted(set((current or []) + (value or [])))
             continue
@@ -35,3 +39,15 @@ def merge_product_data(primary: ProductData, secondary: Optional[ProductData]) -
         merged_payload["source"] = "hybrid"
     merged_payload["confidence"] = round(max(primary.confidence, secondary.confidence), 3)
     return ProductData(**merged_payload)
+
+
+def _merge_eco_signals(primary: list[dict], secondary: list[dict]) -> list[dict]:
+    merged: Dict[str, dict] = {}
+    for item in secondary + primary:
+        if not isinstance(item, dict):
+            continue
+        signal_id = str(item.get("id") or item.get("label") or "").strip()
+        if not signal_id:
+            continue
+        merged[signal_id] = dict(item)
+    return list(merged.values())

@@ -71,6 +71,7 @@ class ProductData(BaseModel):
     brand: Optional[str] = None
     barcode: Optional[str] = None
     ingredients_text: Optional[str] = None
+    eco_ingredient_signals: List[Dict[str, Any]] = Field(default_factory=list)
     nutriments: Dict[str, Optional[Any]] = Field(default_factory=dict)
     packaging: Optional[str] = None
     origins: Optional[str] = None
