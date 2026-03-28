@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ProductDisplay from './ProductDisplay'
 
@@ -9,20 +9,15 @@ const ProductResult = () => {
   const productData = location.state?.product
   const subscores = Object.entries(productData?.subscores || {})
 
-  // Auto-navigate after 2 seconds
-  useEffect(() => {
+  const handleViewAlternative = () => {
     if (!productData) return
 
-    const timer = setTimeout(() => {
-      if (productData.better_choice) {
-        navigate('/product-comparison', { state: { product: productData, betterChoice: productData.better_choice } })
-      } else {
-        navigate('/choice', { state: { product: productData } })
-      }
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [productData, navigate])
+    if (productData.better_choice) {
+      navigate('/product-comparison', { state: { product: productData, betterChoice: productData.better_choice } })
+    } else {
+      navigate('/choice', { state: { product: productData } })
+    }
+  }
 
   if (!productData) {
     return (
@@ -63,25 +58,22 @@ const ProductResult = () => {
             {productData.explanation_short}
           </p>
         )}
-        {subscores.length > 0 && (
-          <section className="mt-4 rounded-2xl border border-[var(--color-green)] bg-white/80 p-4">
-            <p className="mb-3 text-sm font-semibold uppercase tracking-wide text-[var(--color-green)]">
-              Subscore
-            </p>
-            <div className="space-y-2">
-              {subscores.map(([key, value]) => (
-                <div key={key} className="flex items-center justify-between rounded-xl bg-[var(--color-cream)] px-3 py-2 text-sm">
-                  <span className="capitalize text-[var(--color-primary)]">
-                    {key.replaceAll('_', ' ')}
-                  </span>
-                  <span className="font-semibold text-[var(--color-green)]">
-                    {value}/100
-                  </span>
-                </div>
-              ))}
-            </div>
-          </section>
-        )}
+
+        {/* Action Buttons */}
+        <div className="mt-12 flex gap-3">
+          <button
+            onClick={handleViewAlternative}
+            className="flex-1 rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)]"
+          >
+            Vedi alternativa
+          </button>
+          <button
+            onClick={() => navigate('/home')}
+            className="flex-1 rounded-full border-2 border-white bg-transparent px-6 py-3 font-semibold text-white transition hover:bg-white hover:text-[var(--color-lime)]"
+          >
+            Annulla
+          </button>
+        </div>
       </div>
     </main>
   )

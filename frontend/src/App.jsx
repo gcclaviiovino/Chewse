@@ -4,10 +4,15 @@ import profilePic2 from './assets/profile-picture/profile-picture-2.png'
 import profilePic3 from './assets/profile-picture/profile-picture-3.png'
 import appleIcon from './assets/icon-food/icon-food-apple.png'
 import historyIcon from './assets/history-icon.png'
+import chatIcon from './assets/chat-icon.png'
 import CameraCapture from './CameraCapture'
 import ProductResult from './ProductResult'
 import ChoicePage from './ChoicePage'
 import ProductComparison from './ProductComparison'
+import SuccessPage from './SuccessPage'
+import HistoryPage from './HistoryPage'
+import ChatbotPage from './ChatbotPage'
+import FriendSearch from './FriendSearch'
 
 function WelcomePage() {
   const navigate = useNavigate()
@@ -258,7 +263,13 @@ function HomePage() {
           <div className="flex items-center gap-3">
             <img src={profilePic1} alt="Profile" className="h-10 w-10 rounded-full" />
             <span className="font-semibold">{mockUser.name}</span>
-            <img src={historyIcon} alt="History" className="h-6 w-6" />
+            <button 
+              onClick={() => navigate('/history')}
+              className="cursor-pointer hover:opacity-80 transition"
+              aria-label="View history"
+            >
+              <img src={historyIcon} alt="History" className="h-6 w-6" />
+            </button>
           </div>
           <span className="font-bold">{mockUser.points}pts</span>
         </div>
@@ -284,9 +295,18 @@ function HomePage() {
 
         {/* Friends Section */}
         <div>
-          <h3 className="mb-4 text-lg font-bold text-[var(--color-primary)]">
-            I tuoi amici
-          </h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-lg font-bold text-[var(--color-primary)]">
+              I tuoi amici
+            </h3>
+            <button
+              onClick={() => navigate('/add-friend')}
+              className="flex h-8 w-8 items-center justify-center rounded-full bg-[var(--color-green)] text-lg text-white font-bold transition hover:bg-[var(--color-primary)]"
+              aria-label="Add friend"
+            >
+              +
+            </button>
+          </div>
           <div className="space-y-3">
             {mockFriends.map((friend, index) => (
               <div
@@ -326,7 +346,7 @@ function HomePage() {
           </div>
         </div>
 
-        {/* Add Friend Button */}
+        {/* Scan New Product */}
         <div className="flex justify-center py-4">
           <button
             onClick={() => navigate('/camera')}
@@ -336,6 +356,15 @@ function HomePage() {
           </button>
         </div>
         </div>
+
+        {/* Floating Chat Button */}
+        <button
+          onClick={() => navigate('/chat')}
+          className="fixed bottom-6 right-6 h-16 w-16 rounded-full shadow-lg transition hover:shadow-xl active:scale-95"
+          aria-label="Open chat"
+        >
+          <img src={chatIcon} alt="Chat" className="h-full w-full rounded-full" />
+        </button>
       </div>
     </main>
   )
@@ -352,6 +381,10 @@ function App() {
       <Route path="/product-result" element={<ProductResult />} />
       <Route path="/choice" element={<ChoicePage />} />
       <Route path="/product-comparison" element={<ProductComparison />} />
+      <Route path="/success" element={<SuccessPage />} />
+      <Route path="/history" element={<HistoryPage />} />
+      <Route path="/chat" element={<ChatbotPage />} />
+      <Route path="/add-friend" element={<FriendSearch />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   )

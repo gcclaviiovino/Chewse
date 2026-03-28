@@ -8,34 +8,51 @@ const ProductComparison = () => {
   const product = location.state?.product
   const betterChoice = location.state?.betterChoice
 
+  const handleChooseProduct = (chosenProduct) => {
+    // Mock points for now (will be implemented later)
+    const pointsGathered = 50
+    navigate('/success', { 
+      state: { 
+        chosenProduct,
+        pointsGathered 
+      } 
+    })
+  }
+
   return (
-    <main className="min-h-screen p-4 sm:p-8" style={{ backgroundColor: 'var(--color-lime)' }}>
-      <div className="mx-auto max-w-md">
-        <div className="mb-12 flex items-center justify-between">
-          <h1 className="text-3xl font-bold text-[var(--color-primary)]">
-            Confronto Prodotti
+    <main className="min-h-screen flex flex-col p-3 sm:p-4" style={{ backgroundColor: 'var(--color-lime)' }}>
+      <div className="flex flex-col items-center justify-center flex-1">
+        <div className="mb-4 text-center">
+          <h1 className="text-2xl font-bold text-[var(--color-primary)]">
+            Quale stai prendendo?
           </h1>
+        </div>
+
+        {/* Products Comparison - Side by side */}
+        <div className="flex gap-8 sm:gap-12 justify-center items-center mb-8">
+          {/* Original Product */}
           <button
-            onClick={() => navigate('/home')}
-            className="text-2xl text-[var(--color-primary)]"
+            onClick={() => handleChooseProduct(product)}
+            className="transition transform hover:scale-105 focus:outline-none"
           >
-            ✕
+            <ProductDisplay product={product} animate={false} size="small" />
+          </button>
+
+          {/* Better Choice Product */}
+          <button
+            onClick={() => handleChooseProduct(betterChoice)}
+            className="transition transform hover:scale-105 focus:outline-none"
+          >
+            <ProductDisplay product={betterChoice} animate={true} size="small" />
           </button>
         </div>
 
-        <div className="rounded-3xl border-2 border-[var(--color-green)] bg-white p-8 text-center">
-          <p className="mb-8 text-[var(--color-primary)]">
-            Abbiamo trovato una scelta migliore per te!
-          </p>
-          <ProductDisplay product={betterChoice} animate={true} />
-        </div>
-
-        <div className="mt-8 flex gap-3">
+        <div className="mt-6 flex gap-2 w-full max-w-sm px-4">
           <button
             onClick={() => navigate('/home')}
-            className="flex-1 rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)]"
+            className="flex-1 rounded-full bg-white px-6 py-3 font-semibold text-[var(--color-lime)] transition hover:bg-gray-100"
           >
-            Home
+            Annulla
           </button>
         </div>
       </div>

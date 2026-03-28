@@ -30,23 +30,23 @@ const CameraCapture = () => {
       })
 
       if (!response.ok) {
-        let backendMessage = 'Errore durante il caricamento della foto.'
-        try {
-          const errorPayload = await response.json()
-          if (errorPayload?.message) {
-            backendMessage = errorPayload.message
-          }
-        } catch {
-          // Ignore JSON parsing failures and use fallback message.
-        }
-        throw new Error(backendMessage)
+        throw new Error('product_invalid')
       }
 
       const productData = await response.json()
+
+      // Check if product is unknown
+      if (productData.name === 'Prodotto sconosciuto') {
+        throw new Error('product_invalid')
+      }
+
       navigate('/product-result', { state: { product: productData } })
     } catch (error) {
       console.error('Error sending photo:', error)
-      setErrorMessage(error.message || 'Errore di connessione al backend.')
+      const message = error.message === 'product_invalid' 
+        ? 'Prodotto non valido' 
+        : 'Errore di connessione al backend.'
+      setErrorMessage(message)
     } finally {
       setIsUploading(false)
     }
