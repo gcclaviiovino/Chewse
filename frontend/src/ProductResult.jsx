@@ -6,22 +6,12 @@ const ProductResult = () => {
   const navigate = useNavigate()
   const location = useLocation()
 
-  // Fake data for testing (will be replaced with backend data)
-  const productData = location.state?.product || {
-    name: 'mela melinda',
-    product_type: 'apple',
-    product_score: 8,
-    max_score: 10,
-    better_choice: {
-      name: 'mela golden',
-      product_type: 'apple',
-      product_score: 9,
-      max_score: 10,
-    }
-  }
+  const productData = location.state?.product
 
   // Auto-navigate after 2 seconds
   useEffect(() => {
+    if (!productData) return
+
     const timer = setTimeout(() => {
       if (productData.better_choice) {
         navigate('/product-comparison', { state: { product: productData, betterChoice: productData.better_choice } })
@@ -32,6 +22,22 @@ const ProductResult = () => {
 
     return () => clearTimeout(timer)
   }, [productData, navigate])
+
+  if (!productData) {
+    return (
+      <main className="min-h-screen p-4 sm:p-8" style={{ backgroundColor: 'var(--color-lime)' }}>
+        <div className="mx-auto max-w-md rounded-3xl bg-white p-6 text-center shadow-lg">
+          <p className="mb-4 text-[var(--color-primary)]">Nessun risultato da mostrare.</p>
+          <button
+            onClick={() => navigate('/home')}
+            className="rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)]"
+          >
+            Torna alla home
+          </button>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="min-h-screen p-4 sm:p-8" style={{ backgroundColor: 'var(--color-lime)' }}>
@@ -51,6 +57,11 @@ const ProductResult = () => {
 
         {/* Product Display Circle */}
         <ProductDisplay product={productData} animate={true} />
+        {productData.explanation_short && (
+          <p className="rounded-2xl border border-[var(--color-green)] bg-white/80 p-4 text-sm text-[var(--color-primary)]">
+            {productData.explanation_short}
+          </p>
+        )}
       </div>
     </main>
   )

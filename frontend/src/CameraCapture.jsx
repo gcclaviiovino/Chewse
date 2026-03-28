@@ -1,52 +1,56 @@
-import React, { useRef, useCallback } from 'react'
+import React, { useRef, useCallback, useState } from 'react'
 import Webcam from 'react-webcam'
 import { useNavigate } from 'react-router-dom'
 
 const CameraCapture = () => {
   const navigate = useNavigate()
   const webcamRef = useRef(null)
+  const [isUploading, setIsUploading] = useState(false)
+  const [errorMessage, setErrorMessage] = useState('')
+
+  const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
 
   const capture = useCallback(async () => {
-    if (!webcamRef.current) return
+    if (!webcamRef.current || isUploading) return
 
-    // 1. Get the screenshot from the webcam (as a Base64 string)
     const imageSrc = webcamRef.current.getScreenshot()
-
-    // TODO: Uncomment when backend is ready
-    // try {
-    //   // 2. Send it to your Python backend
-    //   const response = await fetch('http://localhost:8000/api/upload-photo', {
-    //     method: 'POST',
-    //     headers: { 'Content-Type': 'application/json' },
-    //     body: JSON.stringify({ image: imageSrc }),
-    //   })
-
-    //   if (response.ok) {
-    //     const productData = await response.json()
-    //     navigate('/product-result', { state: { product: productData } })
-    //   } else {
-    //     alert('Failed to send photo')
-    //   }
-    // } catch (error) {
-    //   console.error('Error sending photo:', error)
-    //   alert('Error sending photo to backend')
-    // }
-
-    // TEMPORARY: For testing without backend
-    const testProduct = {
-      name: 'mela melinda',
-      product_type: 'apple',
-      product_score: 8,
-      max_score: 10,
-      better_choice: {
-        name: 'mela golden',
-        product_type: 'apple',
-        product_score: 9,
-        max_score: 10,
-      }
+    if (!imageSrc) {
+      setErrorMessage('Impossibile catturare la foto. Riprova.')
+      return
     }
-    navigate('/product-result', { state: { product: testProduct } })
-  }, [webcamRef, navigate])
+
+    setIsUploading(true)
+    setErrorMessage('')
+
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/upload-photo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: imageSrc, mode: 'fast', locale: 'it-IT' }),
+      })
+
+      if (!response.ok) {
+        let backendMessage = 'Errore durante il caricamento della foto.'
+        try {
+          const errorPayload = await response.json()
+          if (errorPayload?.message) {
+            backendMessage = errorPayload.message
+          }
+        } catch {
+          // Ignore JSON parsing failures and use fallback message.
+        }
+        throw new Error(backendMessage)
+      }
+
+      const productData = await response.json()
+      navigate('/product-result', { state: { product: productData } })
+    } catch (error) {
+      console.error('Error sending photo:', error)
+      setErrorMessage(error.message || 'Errore di connessione al backend.')
+    } finally {
+      setIsUploading(false)
+    }
+  }, [webcamRef, navigate, apiBaseUrl, isUploading])
 
   return (
     <main className="min-h-screen bg-gray-50 p-4 sm:p-8">
@@ -76,9 +80,10 @@ const CameraCapture = () => {
         <div className="flex gap-3">
           <button
             onClick={capture}
-            className="flex-1 rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)]"
+            disabled={isUploading}
+            className="flex-1 rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-70"
           >
-            Scatta
+            {isUploading ? 'Invio in corso...' : 'Scatta'}
           </button>
           <button
             onClick={() => navigate('/home')}
@@ -87,6 +92,12 @@ const CameraCapture = () => {
             Annulla
           </button>
         </div>
+
+        {errorMessage && (
+          <p className="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {errorMessage}
+          </p>
+        )}
       </div>
     </main>
   )

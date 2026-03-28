@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import logging
+from pathlib import Path
+from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
 from app.core.errors import AppError, ErrorEnvelope
 from app.core.logger import configure_logging
@@ -24,6 +30,44 @@ def _model_dump(model) -> dict:
     if hasattr(model, "model_dump"):
         return model.model_dump()
     return model.dict()
+
+
+class UploadPhotoRequest(BaseModel):
+    image: str = Field(min_length=20)
+    mode: str = Field(default="fast")
+    locale: str = Field(default="it-IT")
+    user_query: str | None = None
+
+
+def _extract_base64_data(image_payload: str) -> str:
+    if image_payload.startswith("data:"):
+        marker = ";base64,"
+        if marker not in image_payload:
+            raise AppError(
+                "invalid_image_payload",
+                "Image payload must be a valid base64 data URL.",
+                status_code=400,
+            )
+        return image_payload.split(marker, 1)[1].strip()
+    return image_payload.strip()
+
+
+def _infer_product_type(product_name: str | None) -> str:
+    name = (product_name or "").lower()
+    if "banana" in name:
+        return "banana"
+    if "uovo" in name or "egg" in name:
+        return "egg"
+    return "apple"
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.middleware("http")
@@ -136,6 +180,51 @@ async def health() -> dict:
 async def pipeline_run(payload: PipelineInput) -> PipelineOutput:
     orchestrator = build_orchestrator()
     return await orchestrator.run_pipeline(payload)
+
+
+@app.post("/api/upload-photo")
+async def upload_photo(payload: UploadPhotoRequest) -> dict:
+    mode = payload.mode if payload.mode in {"fast", "deep"} else "fast"
+
+    encoded = _extract_base64_data(payload.image)
+    try:
+        image_bytes = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        raise AppError(
+            "invalid_image_payload",
+            "Image payload is not valid base64.",
+            status_code=400,
+        )
+
+    if not image_bytes:
+        raise AppError(
+            "invalid_image_payload",
+            "Image payload is empty.",
+            status_code=400,
+        )
+
+    allowed_root = settings.allowed_image_roots()[0]
+    upload_dir = Path(allowed_root) / "captured_uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    image_path = upload_dir / f"webcam-{uuid4().hex}.jpg"
+    image_path.write_bytes(image_bytes)
+
+    pipeline_input = PipelineInput(
+        image_path=str(image_path),
+        mode=mode,
+        locale=payload.locale,
+        user_query=payload.user_query,
+    )
+    output = await build_orchestrator().run_pipeline(pipeline_input)
+
+    return {
+        "trace_id": output.trace_id,
+        "name": output.product.product_name or "Prodotto sconosciuto",
+        "product_type": _infer_product_type(output.product.product_name),
+        "product_score": output.score.total_score,
+        "max_score": 100,
+        "explanation_short": output.explanation_short,
+    }
 
 
 @app.post("/pipeline/reindex")

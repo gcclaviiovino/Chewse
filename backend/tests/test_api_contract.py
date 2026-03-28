@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 
 from app.core.errors import AppError
 from app.schemas.pipeline import PipelineInput, ProductData
@@ -67,3 +68,21 @@ def test_health_includes_trace_id(api_client) -> None:
 
     assert response.status_code == 200
     assert response.json()["trace_id"]
+
+
+def test_upload_photo_endpoint_accepts_base64(api_client) -> None:
+    encoded = base64.b64encode(b"fake-image-content").decode("ascii")
+    response = api_client.post(
+        "/api/upload-photo",
+        json={
+            "image": f"data:image/jpeg;base64,{encoded}",
+            "mode": "fast",
+            "locale": "it-IT",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["trace_id"]
+    assert payload["name"]
+    assert 0 <= payload["product_score"] <= payload["max_score"]
