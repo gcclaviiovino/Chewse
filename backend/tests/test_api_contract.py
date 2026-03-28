@@ -91,3 +91,6 @@ def test_upload_photo_endpoint_accepts_base64(api_client) -> None:
     assert payload["subscores"]
     assert "ingredients" in payload["subscores"]
     assert payload["score_source"] in {"off_ecoscore", "off_plus_local", "local_fallback"}
+    assert "score_transparency" in payload
+    assert payload["score_transparency"]["source_mode"] in {"official", "hybrid", "estimated"}
+    assert payload["score_transparency"]["trust_level"] in {"high", "medium", "low"}

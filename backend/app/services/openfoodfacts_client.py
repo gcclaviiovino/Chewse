@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import random
 import time
@@ -94,33 +95,53 @@ class OpenFoodFactsClient:
 
         retry_count = 0
         last_result: Optional[OpenFoodFactsResult] = None
+        product_urls = self._candidate_product_urls(normalized_barcode)
         async with httpx.AsyncClient(timeout=self._build_timeout()) as client:
             while True:
-                attempt_started = time.perf_counter()
-                try:
-                    response = await client.get(
-                        self._build_product_url(normalized_barcode),
-                        headers=self._build_headers(),
-                        params=self._build_query_params(locale),
-                    )
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException) as exc:
-                    last_result = self._build_error_result(
-                        http_status=None,
-                        error_code=type(exc).__name__.lower(),
-                        error_detail=str(exc),
-                        retry_count=retry_count,
-                        started_at=started_at,
-                        source="remote",
-                    )
-                    if retry_count >= self.settings.off_max_retries:
-                        last_result.meta["retry_exhausted"] = True
-                        last_result.meta["cache"] = "miss"
-                        return last_result
-                    await self._sleep_before_retry(retry_count)
-                    retry_count += 1
+                failover_used = False
+                response = None
+                attempt_ms = None
+                for url_index, product_url in enumerate(product_urls):
+                    attempt_started = time.perf_counter()
+                    try:
+                        response = await client.get(
+                            product_url,
+                            headers=self._build_headers(base_url=product_url),
+                            params=self._build_query_params(locale),
+                        )
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException) as exc:
+                        last_result = self._build_error_result(
+                            http_status=None,
+                            error_code=type(exc).__name__.lower(),
+                            error_detail=str(exc),
+                            retry_count=retry_count,
+                            started_at=started_at,
+                            source="remote",
+                        )
+                        last_result.meta["attempted_url"] = product_url
+                        if url_index < len(product_urls) - 1:
+                            failover_used = True
+                            continue
+                        if retry_count >= self.settings.off_max_retries:
+                            last_result.meta["retry_exhausted"] = True
+                            last_result.meta["cache"] = "miss"
+                            last_result.meta["failover_used"] = failover_used
+                            return last_result
+                        await self._sleep_before_retry(retry_count)
+                        retry_count += 1
+                        response = None
+                        break
+
+                    attempt_ms = int((time.perf_counter() - attempt_started) * 1000)
+                    status_code = response.status_code
+                    if 500 <= status_code <= 599 and url_index < len(product_urls) - 1:
+                        failover_used = True
+                        continue
+                    break
+
+                if response is None:
                     continue
 
-                attempt_ms = int((time.perf_counter() - attempt_started) * 1000)
                 status_code = response.status_code
 
                 if status_code == 429:
@@ -135,6 +156,8 @@ class OpenFoodFactsClient:
                     last_result.status = "rate_limited"
                     last_result.meta["retry_after_seconds"] = self._retry_after_seconds(response)
                     last_result.meta["attempt_ms"] = attempt_ms
+                    last_result.meta["attempted_url"] = str(response.request.url)
+                    last_result.meta["failover_used"] = failover_used
                     if retry_count >= self.settings.off_max_retries:
                         last_result.meta["retry_exhausted"] = True
                         last_result.meta["cache"] = "miss"
@@ -153,6 +176,8 @@ class OpenFoodFactsClient:
                         source="remote",
                     )
                     last_result.meta["attempt_ms"] = attempt_ms
+                    last_result.meta["attempted_url"] = str(response.request.url)
+                    last_result.meta["failover_used"] = failover_used
                     if retry_count >= self.settings.off_max_retries:
                         last_result.meta["retry_exhausted"] = True
                         last_result.meta["cache"] = "miss"
@@ -171,6 +196,8 @@ class OpenFoodFactsClient:
                         source="remote",
                     )
                     result.meta["attempt_ms"] = attempt_ms
+                    result.meta["attempted_url"] = str(response.request.url)
+                    result.meta["failover_used"] = failover_used
                     result.meta["cache"] = "miss"
                     return result
 
@@ -192,6 +219,8 @@ class OpenFoodFactsClient:
                             "cache": "miss",
                         },
                     )
+                    result.meta["attempted_url"] = str(response.request.url)
+                    result.meta["failover_used"] = failover_used
                     return result
 
                 result = self._result_from_payload(
@@ -204,6 +233,8 @@ class OpenFoodFactsClient:
                     started_at=started_at,
                     attempt_ms=attempt_ms,
                 )
+                result.meta["attempted_url"] = str(response.request.url)
+                result.meta["failover_used"] = failover_used
                 result.meta["cache"] = "miss"
                 self._store_cache(cache_key, result)
                 return result
@@ -220,19 +251,32 @@ class OpenFoodFactsClient:
             return []
 
         retry_count = 0
+        search_urls = self._candidate_search_urls()
         async with httpx.AsyncClient(timeout=self._build_timeout()) as client:
             while True:
-                try:
-                    response = await client.get(
-                        self._build_search_url(),
-                        headers=self._build_headers(),
-                        params=params,
-                    )
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException):
-                    if retry_count >= self.settings.off_max_retries:
-                        return []
-                    await self._sleep_before_retry(retry_count)
-                    retry_count += 1
+                response = None
+                for url_index, search_url in enumerate(search_urls):
+                    try:
+                        response = await client.get(
+                            search_url,
+                            headers=self._build_headers(base_url=search_url),
+                            params=params,
+                        )
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException):
+                        if url_index < len(search_urls) - 1:
+                            continue
+                        if retry_count >= self.settings.off_max_retries:
+                            return []
+                        await self._sleep_before_retry(retry_count)
+                        retry_count += 1
+                        response = None
+                        break
+
+                    if 500 <= response.status_code <= 599 and url_index < len(search_urls) - 1:
+                        continue
+                    break
+
+                if response is None:
                     continue
 
                 if response.status_code == 429:
@@ -267,11 +311,15 @@ class OpenFoodFactsClient:
             pool=self.settings.off_timeout_connect_seconds,
         )
 
-    def _build_headers(self) -> Dict[str, str]:
-        return {
+    def _build_headers(self, base_url: Optional[str] = None) -> Dict[str, str]:
+        headers = {
             "User-Agent": self.settings.off_user_agent,
             "Accept": "application/json",
         }
+        if self._is_staging_url(base_url):
+            credentials = base64.b64encode(b"off:off").decode("ascii")
+            headers["Authorization"] = "Basic {}".format(credentials)
+        return headers
 
     def _build_query_params(self, locale: Optional[str]) -> Dict[str, str]:
         lc, cc = self._locale_hints(locale)
@@ -296,6 +344,30 @@ class OpenFoodFactsClient:
 
     def _build_search_url(self) -> str:
         return "{}/search".format(self.settings.off_base_url.rstrip("/"))
+
+    def _candidate_product_urls(self, barcode: str) -> list[str]:
+        return ["{}/product/{}.json".format(base_url.rstrip("/"), barcode) for base_url in self._candidate_base_urls()]
+
+    def _candidate_search_urls(self) -> list[str]:
+        return ["{}/search".format(base_url.rstrip("/")) for base_url in self._candidate_base_urls()]
+
+    def _candidate_base_urls(self) -> list[str]:
+        primary = self.settings.off_base_url.rstrip("/")
+        urls = [primary]
+        if "world.openfoodfacts.org/api/v2" in primary:
+            urls.append(primary.replace("world.openfoodfacts.org/api/v2", "world.openfoodfacts.net/api/v2"))
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for url in urls:
+            if url in seen:
+                continue
+            seen.add(url)
+            deduped.append(url)
+        return deduped
+
+    @staticmethod
+    def _is_staging_url(base_url: Optional[str]) -> bool:
+        return bool(base_url and "world.openfoodfacts.net" in base_url)
 
     def _build_search_query(
         self,

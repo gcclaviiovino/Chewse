@@ -117,7 +117,66 @@ def test_off_client_retries_5xx_then_fails(monkeypatch, settings) -> None:
     assert result.http_status == 503
     assert result.error_code == "server_error"
     assert result.meta["retry_exhausted"] is True
-    assert attempts["count"] == 3
+    assert attempts["count"] == 6
+
+
+def test_off_client_fails_over_to_staging_on_503(monkeypatch, settings) -> None:
+    client = OpenFoodFactsClient(settings)
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_get(self, url, headers=None, params=None):
+        calls.append((url, headers))
+        request = httpx.Request("GET", url, headers=headers, params=params)
+        if "world.openfoodfacts.org" in url:
+            return httpx.Response(503, request=request, json={"status": 0})
+        return httpx.Response(
+            200,
+            request=request,
+            json={"status": 1, "product": {"code": "123", "product_name": "Fallback Product"}},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    result = asyncio.run(client.fetch_product_result("123", locale="it-IT"))
+
+    assert result.status == "ok"
+    assert result.product["product_name"] == "Fallback Product"
+    assert result.meta["failover_used"] is True
+    assert "world.openfoodfacts.org" in calls[0][0]
+    assert "world.openfoodfacts.net" in calls[1][0]
+    assert calls[1][1]["Authorization"].startswith("Basic ")
+
+
+def test_off_search_fails_over_to_staging_on_503(monkeypatch, settings) -> None:
+    client = OpenFoodFactsClient(settings)
+    normalizer = ProductNormalizer()
+    calls: list[tuple[str, dict | None]] = []
+
+    async def fake_get(self, url, headers=None, params=None):
+        calls.append((url, headers))
+        request = httpx.Request("GET", url, headers=headers, params=params)
+        if "world.openfoodfacts.org" in url:
+            return httpx.Response(503, request=request, json={"products": []})
+        return httpx.Response(
+            200,
+            request=request,
+            json={"products": [{"code": "321", "product_name": "Alt Product"}]},
+        )
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    results = asyncio.run(
+        client.search_similar_products(
+            product=normalizer.normalize_llm_payload({"product_name": "Crackers", "categories_tags": ["snacks"]}),
+            locale="it-IT",
+            limit=5,
+        )
+    )
+
+    assert results[0]["product_name"] == "Alt Product"
+    assert "world.openfoodfacts.org" in calls[0][0]
+    assert "world.openfoodfacts.net" in calls[1][0]
+    assert calls[1][1]["Authorization"].startswith("Basic ")
 
 
 def test_off_client_returns_parse_error_on_malformed_json(monkeypatch, settings) -> None:

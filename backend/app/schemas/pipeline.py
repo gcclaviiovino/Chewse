@@ -166,10 +166,28 @@ class PipelineOutput(BaseModel):
     trace: List[TraceStep] = Field(default_factory=list)
 
 
+class ScoreTransparency(BaseModel):
+    source_mode: Literal["official", "hybrid", "estimated"] = "estimated"
+    official_component: int = 0
+    ai_component: int = 0
+    trust_level: Literal["high", "medium", "low"] = "medium"
+    certainty_summary: str = ""
+    reliable_fields: List[str] = Field(default_factory=list)
+    estimated_fields: List[str] = Field(default_factory=list)
+    missing_fields: List[str] = Field(default_factory=list)
+
+
 class UploadPhotoResponse(BaseModel):
     trace_id: Optional[str] = None
     barcode: Optional[str] = None
     name: str
+    brand: Optional[str] = None
+    ingredients_text: Optional[str] = None
+    packaging: Optional[str] = None
+    origins: Optional[str] = None
+    labels_tags: List[str] = Field(default_factory=list)
+    categories_tags: List[str] = Field(default_factory=list)
+    quantity: Optional[str] = None
     product_type: str
     product_score: int
     max_score: int = 100
@@ -179,10 +197,19 @@ class UploadPhotoResponse(BaseModel):
     score_source: Literal["off_ecoscore", "off_plus_local", "local_fallback"] = "local_fallback"
     subscores: Dict[str, int] = Field(default_factory=dict)
     flags: List[str] = Field(default_factory=list)
+    score_transparency: ScoreTransparency
 
 
 class AlternativesRequest(BaseModel):
-    barcode: str
+    barcode: Optional[str] = None
+    product_name: Optional[str] = None
+    brand: Optional[str] = None
+    ingredients_text: Optional[str] = None
+    packaging: Optional[str] = None
+    origins: Optional[str] = None
+    labels_tags: List[str] = Field(default_factory=list)
+    categories_tags: List[str] = Field(default_factory=list)
+    quantity: Optional[str] = None
     locale: str = "it-IT"
     user_query: Optional[str] = None
     user_id: Optional[str] = None

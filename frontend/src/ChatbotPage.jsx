@@ -10,7 +10,6 @@ const ChatbotPage = () => {
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [alternatives, setAlternatives] = useState(null)
-  const [preferenceSource, setPreferenceSource] = useState(null)
   const [needsFirstInput, setNeedsFirstInput] = useState(false)
   const messagesEndRef = useRef(null)
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
@@ -26,11 +25,11 @@ const ChatbotPage = () => {
 
   // Fetch initial alternatives when component mounts
   useEffect(() => {
-    if (!productData?.barcode) {
+    if (!productData?.barcode && !productData?.name) {
       setMessages([
         {
           id: 1,
-          text: 'Non riesco a leggere il barcode di questo prodotto. Riprova la scansione inquadrando bene il codice a barre.',
+          text: 'Non riesco a identificare questo prodotto in modo affidabile. Riprova la scansione inquadrando bene fronte e barcode.',
           sender: 'bot'
         }
       ])
@@ -45,6 +44,14 @@ const ChatbotPage = () => {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             barcode: productData.barcode,
+            product_name: productData.name,
+            brand: productData.brand,
+            ingredients_text: productData.ingredients_text,
+            packaging: productData.packaging,
+            origins: productData.origins,
+            labels_tags: productData.labels_tags || [],
+            categories_tags: productData.categories_tags || [],
+            quantity: productData.quantity,
             locale: 'it-IT',
             user_id: userId,
           }),
@@ -53,7 +60,6 @@ const ChatbotPage = () => {
         if (!response.ok) throw new Error('Failed to fetch alternatives')
         const data = await response.json()
         setAlternatives(data)
-        setPreferenceSource(data.preference_source)
 
         const botMessage = {
           id: 1,
@@ -92,6 +98,14 @@ const ChatbotPage = () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           barcode: productData.barcode,
+          product_name: productData.name,
+          brand: productData.brand,
+          ingredients_text: productData.ingredients_text,
+          packaging: productData.packaging,
+          origins: productData.origins,
+          labels_tags: productData.labels_tags || [],
+          categories_tags: productData.categories_tags || [],
+          quantity: productData.quantity,
           locale: 'it-IT',
           user_id: userId,
           user_message: inputValue,
@@ -101,12 +115,11 @@ const ChatbotPage = () => {
       if (!response.ok) throw new Error('Failed to process preferences')
       const data = await response.json()
       setAlternatives(data)
-      setPreferenceSource(data.preference_source)
-      setNeedsFirstInput(false)
+      setNeedsFirstInput(data.needs_preference_input)
 
       const botMessage = {
         id: messages.length + 2,
-        text: data.assistant_message || 'Perfetto! Ho salvato le tue preferenze. Ecco le alternative disponibili.',
+        text: data.assistant_message || 'Ho aggiornato le alternative in base alle tue preferenze.',
         sender: 'bot'
       }
       setMessages(prev => [...prev, botMessage])

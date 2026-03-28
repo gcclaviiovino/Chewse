@@ -19,7 +19,7 @@ from app.core.logger import configure_logging
 from app.core.observability import generate_trace_id, get_trace_id, log_event, redact_data, safe_debug_trace, set_trace_id
 from app.core.settings import get_settings
 from app.pipeline import build_alternatives_service, build_orchestrator
-from app.schemas.pipeline import AlternativesRequest, AlternativesResponse, PipelineInput, PipelineOutput, UploadPhotoResponse
+from app.schemas.pipeline import AlternativesRequest, AlternativesResponse, PipelineInput, PipelineOutput, ProductData, ScoreResult, ScoreTransparency, UploadPhotoResponse
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -60,6 +60,77 @@ def _infer_product_type(product_name: Optional[str]) -> str:
     if "uovo" in name or "egg" in name:
         return "egg"
     return "apple"
+
+
+def _build_score_transparency(product: ProductData, score: ScoreResult) -> ScoreTransparency:
+    field_labels = {
+        "ecoscore_score": "Eco-Score ufficiale",
+        "ingredients_text": "Ingredienti",
+        "eco_ingredient_signals": "Ingredienti letti dalla confezione",
+        "packaging": "Imballaggio",
+        "origins": "Origine",
+        "categories_tags": "Categoria",
+        "labels_tags": "Certificazioni",
+    }
+
+    reliable_fields: list[str] = []
+    estimated_fields: list[str] = []
+    missing_fields: list[str] = []
+
+    for field_name, label in field_labels.items():
+        complete = bool(product.data_completeness.get(field_name))
+        provenance = product.field_provenance.get(field_name, {})
+        source = str(provenance.get("source") or "").strip().lower()
+
+        if not complete:
+            missing_fields.append(label)
+            continue
+
+        if source in {"openfoodfacts", "off_agribalyse"}:
+            reliable_fields.append(label)
+        elif source in {"image_llm", "off_image_ai"} or (not source and field_name != "ecoscore_score"):
+            estimated_fields.append(label)
+        else:
+            reliable_fields.append(label)
+
+    if score.score_source == "off_ecoscore":
+        source_mode = "official"
+        official_component = score.total_score
+        ai_component = 0
+    elif score.score_source == "off_plus_local":
+        source_mode = "hybrid"
+        official_component = score.official_score or 0
+        ai_component = max(score.total_score - official_component, 0)
+    else:
+        source_mode = "estimated"
+        official_component = 0
+        ai_component = score.total_score
+
+    confidence = float(product.confidence or 0.0)
+    if source_mode == "official" and confidence >= 0.7:
+        trust_level = "high"
+    elif source_mode == "estimated" and confidence < 0.5:
+        trust_level = "low"
+    else:
+        trust_level = "medium"
+
+    if source_mode == "official":
+        certainty_summary = "Il punteggio si basa soprattutto su dati ufficiali verificati."
+    elif source_mode == "hybrid":
+        certainty_summary = "Il punteggio unisce dati ufficiali e stime AI sui dettagli mancanti."
+    else:
+        certainty_summary = "Il punteggio dipende soprattutto da una stima AI, quindi e meno affidabile."
+
+    return ScoreTransparency(
+        source_mode=source_mode,
+        official_component=max(0, min(official_component, 100)),
+        ai_component=max(0, min(ai_component, 100)),
+        trust_level=trust_level,
+        certainty_summary=certainty_summary,
+        reliable_fields=reliable_fields,
+        estimated_fields=estimated_fields,
+        missing_fields=missing_fields,
+    )
 
 
 app.add_middleware(
@@ -228,6 +299,13 @@ async def upload_photo(payload: UploadPhotoRequest) -> UploadPhotoResponse:
         trace_id=output.trace_id,
         barcode=output.product.barcode,
         name=output.product.product_name or "Prodotto sconosciuto",
+        brand=output.product.brand,
+        ingredients_text=output.product.ingredients_text,
+        packaging=output.product.packaging,
+        origins=output.product.origins,
+        labels_tags=output.product.labels_tags,
+        categories_tags=output.product.categories_tags,
+        quantity=output.product.quantity,
         product_type=_infer_product_type(output.product.product_name),
         product_score=output.score.total_score,
         max_score=100,
@@ -237,6 +315,7 @@ async def upload_photo(payload: UploadPhotoRequest) -> UploadPhotoResponse:
         score_source=output.score.score_source,
         subscores=output.score.subscores,
         flags=output.score.flags,
+        score_transparency=_build_score_transparency(output.product, output.score),
     )
 
 
