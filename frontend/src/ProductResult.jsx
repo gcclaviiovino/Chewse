@@ -1,10 +1,49 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import ProductDisplay from './ProductDisplay'
+
+const scoreLabels = {
+  nutrition: 'Valori nutrizionali',
+  packaging: 'Imballaggio',
+  ingredients: 'Ingredienti',
+  labels: 'Certificazioni',
+  origins: 'Origine',
+}
+
+const categoryTranslations = {
+  breakfasts: 'Colazione',
+  snacks: 'Snack',
+  biscuits: 'Biscotti',
+  cakes: 'Dolci',
+  desserts: 'Dessert',
+  bread: 'Pane',
+  pasta: 'Pasta',
+  cereals: 'Cereali',
+  fruit: 'Frutta',
+  fruits: 'Frutta',
+  vegetables: 'Verdura',
+  vegetable: 'Verdura',
+  legumes: 'Legumi',
+  beans: 'Legumi',
+  dairy: 'Latticini',
+  cheese: 'Formaggi',
+  butter: 'Burro',
+  fish: 'Pesce',
+  seafood: 'Pesce',
+  meat: 'Carne',
+  beef: 'Manzo',
+}
+
+const trustLevelLabels = {
+  high: 'Alta',
+  medium: 'Media',
+  low: 'Bassa',
+}
 
 const ProductResult = () => {
   const navigate = useNavigate()
   const location = useLocation()
+  const [isTransparencyOpen, setIsTransparencyOpen] = useState(false)
 
   const productData = location.state?.product
   const subscores = Object.entries(productData?.subscores || {})
@@ -17,14 +56,6 @@ const ProductResult = () => {
     const highest = scored.reduce((max, curr) => curr.value > max.value ? curr : max)
     const lowest = scored.reduce((min, curr) => curr.value < min.value ? curr : min)
 
-    const scoreLabels = {
-      nutrition: 'Valori nutrizionali',
-      packaging: 'Imballaggio',
-	  ingredients: 'Ingredienti',
-	  labels: 'Certificazioni',
-	  origins: 'Origini Geografiche'
-    }
-
     return {
       highest,
       lowest,
@@ -34,6 +65,47 @@ const ProductResult = () => {
   }
 
   const scoreInsights = getScoreInsights()
+  const translatedCategories = (productData?.categories_tags || [])
+    .map((tag) => {
+      const normalized = String(tag || '')
+        .toLowerCase()
+        .replace(/^.*:/, '')
+        .replaceAll('_', ' ')
+        .replaceAll('-', ' ')
+        .trim()
+
+      return categoryTranslations[normalized] || normalized.charAt(0).toUpperCase() + normalized.slice(1)
+    })
+    .filter(Boolean)
+    .slice(0, 3)
+
+  const buildPlainLanguageSummary = () => {
+    if (!productData) return ''
+
+    const score = Number(productData.product_score || 0)
+    let opening = 'Scelta discreta dal punto di vista ambientale.'
+    if (score >= 75) {
+      opening = 'Buona scelta dal punto di vista ambientale.'
+    } else if (score < 45) {
+      opening = 'Prodotto con margini di miglioramento dal punto di vista ambientale.'
+    }
+
+    const strongestArea = scoreInsights.highest ? scoreLabels[scoreInsights.highest.name] || scoreInsights.highest.name : null
+    const weakestArea = scoreInsights.lowest ? scoreLabels[scoreInsights.lowest.name] || scoreInsights.lowest.name : null
+
+    if (strongestArea && weakestArea && strongestArea !== weakestArea) {
+      return `${opening} Punto forte: ${strongestArea}. Da migliorare: ${weakestArea}.`
+    }
+
+    if (strongestArea) {
+      return `${opening} Il punto più positivo riguarda ${strongestArea.toLowerCase()}.`
+    }
+
+    return opening
+  }
+
+  const plainLanguageSummary = buildPlainLanguageSummary()
+  const scoreTransparency = productData?.score_transparency
 
   const handleViewAlternative = () => {
     if (!productData) return
@@ -75,11 +147,83 @@ const ProductResult = () => {
         {/* Product Display Circle */}
         <ProductDisplay product={productData} animate={true} />
         
-        {/* Explanation */}
-        {productData.explanation_short && (
+        {/* Summary */}
+        {plainLanguageSummary && (
           <p className="rounded-2xl border border-[var(--color-green)] bg-white/80 p-4 text-sm text-[var(--color-primary)]">
-            {productData.explanation_short}
+            {plainLanguageSummary}
           </p>
+        )}
+
+        {translatedCategories.length > 0 && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {translatedCategories.map((category) => (
+              <span
+                key={category}
+                className="rounded-full border border-[var(--color-green)] bg-white/80 px-3 py-1 text-xs font-medium text-[var(--color-primary)]"
+              >
+                {category}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {scoreTransparency && (
+          <button
+            type="button"
+            onClick={() => setIsTransparencyOpen((value) => !value)}
+            className="mt-6 w-full rounded-3xl border-2 border-[var(--color-green)] bg-white/85 p-4 text-left text-[var(--color-primary)] transition hover:bg-white"
+          >
+            <div className="flex items-center justify-between gap-4">
+              <p className="text-sm font-bold">Come abbiamo calcolato questo punteggio</p>
+              <span className="text-xl font-bold text-[var(--color-green)]">
+                {isTransparencyOpen ? '−' : '+'}
+              </span>
+            </div>
+
+            {isTransparencyOpen && (
+              <div className="mt-4">
+                <div className="grid grid-cols-3 gap-3 text-center">
+                  <div className="rounded-2xl bg-[var(--color-cream)] px-3 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-green)]">Dati certi</p>
+                    <p className="mt-1 text-lg font-bold">{scoreTransparency.official_component}/100</p>
+                  </div>
+                  <div className="rounded-2xl bg-[var(--color-cream)] px-3 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-green)]">Stima AI</p>
+                    <p className="mt-1 text-lg font-bold">{scoreTransparency.ai_component}/100</p>
+                  </div>
+                  <div className="rounded-2xl bg-[var(--color-cream)] px-3 py-3">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--color-green)]">Affidabilità</p>
+                    <p className="mt-1 text-lg font-bold">{trustLevelLabels[scoreTransparency.trust_level] || 'Media'}</p>
+                  </div>
+                </div>
+
+                {scoreTransparency.certainty_summary && (
+                  <p className="mt-4 text-sm">{scoreTransparency.certainty_summary}</p>
+                )}
+
+                {scoreTransparency.reliable_fields?.length > 0 && (
+                  <p className="mt-3 text-sm">
+                    <span className="font-semibold">Basato su dati certi:</span>{' '}
+                    {scoreTransparency.reliable_fields.join(', ')}.
+                  </p>
+                )}
+
+                {scoreTransparency.estimated_fields?.length > 0 && (
+                  <p className="mt-2 text-sm">
+                    <span className="font-semibold">Stimato con AI:</span>{' '}
+                    {scoreTransparency.estimated_fields.join(', ')}.
+                  </p>
+                )}
+
+                {scoreTransparency.missing_fields?.length > 0 && (
+                  <p className="mt-2 text-sm">
+                    <span className="font-semibold">Dati mancanti:</span>{' '}
+                    {scoreTransparency.missing_fields.join(', ')}.
+                  </p>
+                )}
+              </div>
+            )}
+          </button>
         )}
 
         {/* Subscores Insights */}

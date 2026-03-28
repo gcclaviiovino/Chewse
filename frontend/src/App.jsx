@@ -79,7 +79,6 @@ function SignUpPage() {
     const formData = new FormData(event.currentTarget)
     const name = formData.get('name')
     const surname = formData.get('surname')
-    const password = formData.get('password')
     const terms = formData.get('terms')
 
     if (!terms) {
