@@ -52,11 +52,61 @@ class Settings(BaseModel):
     regolo_api_key: str = Field(default_factory=lambda: os.getenv("REGOLO_API_KEY", ""))
     regolo_api_header: str = Field(default_factory=lambda: os.getenv("REGOLO_API_HEADER", "Authorization"))
     regolo_api_prefix: str = Field(default_factory=lambda: os.getenv("REGOLO_API_PREFIX", "Bearer"))
-    openfoodfacts_base_url: str = Field(
-        default_factory=lambda: os.getenv("OPENFOODFACTS_BASE_URL", "https://world.openfoodfacts.org/api/v2")
+    off_base_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "OFF_BASE_URL",
+            os.getenv("OPENFOODFACTS_BASE_URL", "https://world.openfoodfacts.org/api/v2"),
+        )
     )
-    off_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("OFF_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS", "60"))))
-    off_retry_count: int = Field(default_factory=lambda: int(os.getenv("OFF_RETRY_COUNT", "2")))
+    openfoodfacts_base_url: str = Field(
+        default_factory=lambda: os.getenv(
+            "OFF_BASE_URL",
+            os.getenv("OPENFOODFACTS_BASE_URL", "https://world.openfoodfacts.org/api/v2"),
+        )
+    )
+    off_user_agent: str = Field(
+        default_factory=lambda: os.getenv("OFF_USER_AGENT", "SocialFoodBackend/1.0 (support@example.com)")
+    )
+    off_timeout_connect_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv(
+                "OFF_TIMEOUT_CONNECT_SECONDS",
+                os.getenv("OFF_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS", "10")),
+            )
+        )
+    )
+    off_timeout_read_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv(
+                "OFF_TIMEOUT_READ_SECONDS",
+                os.getenv("OFF_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS", "30")),
+            )
+        )
+    )
+    off_timeout_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv("OFF_TIMEOUT_READ_SECONDS", os.getenv("OFF_TIMEOUT_SECONDS", os.getenv("REQUEST_TIMEOUT_SECONDS", "30")))
+        )
+    )
+    off_max_retries: int = Field(
+        default_factory=lambda: int(os.getenv("OFF_MAX_RETRIES", os.getenv("OFF_RETRY_COUNT", "2")))
+    )
+    off_retry_count: int = Field(
+        default_factory=lambda: int(os.getenv("OFF_MAX_RETRIES", os.getenv("OFF_RETRY_COUNT", "2")))
+    )
+    off_backoff_base_ms: int = Field(
+        default_factory=lambda: int(
+            os.getenv("OFF_BACKOFF_BASE_MS", str(int(float(os.getenv("RETRY_BACKOFF_BASE_SECONDS", "0.25")) * 1000)))
+        )
+    )
+    off_respect_retry_after: bool = Field(
+        default_factory=lambda: os.getenv("OFF_RESPECT_RETRY_AFTER", "true").lower() == "true"
+    )
+    off_cache_enabled: bool = Field(default_factory=lambda: os.getenv("OFF_CACHE_ENABLED", "true").lower() == "true")
+    off_cache_ttl_seconds: int = Field(default_factory=lambda: int(os.getenv("OFF_CACHE_TTL_SECONDS", "3600")))
+    off_cache_not_found_ttl_seconds: int = Field(
+        default_factory=lambda: int(os.getenv("OFF_CACHE_NOT_FOUND_TTL_SECONDS", "300"))
+    )
     request_timeout_seconds: float = Field(default_factory=lambda: float(os.getenv("REQUEST_TIMEOUT_SECONDS", "60")))
     retry_backoff_base_seconds: float = Field(default_factory=lambda: float(os.getenv("RETRY_BACKOFF_BASE_SECONDS", "0.25")))
     retry_jitter_seconds: float = Field(default_factory=lambda: float(os.getenv("RETRY_JITTER_SECONDS", "0.1")))

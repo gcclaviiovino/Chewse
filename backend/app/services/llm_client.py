@@ -109,6 +109,7 @@ class LLMClient:
             "model": self.settings.llm_model,
             "messages": messages,
             "stream": False,
+            "max_tokens": self._default_max_tokens(thinking),
         }
         if thinking:
             payload["thinking"] = True
@@ -121,6 +122,10 @@ class LLMClient:
             retry_count=self.settings.llm_retry_count,
         )
         return truncate_text(self._extract_message_content(data), self.settings.llm_output_max_chars)
+
+    @staticmethod
+    def _default_max_tokens(thinking: bool) -> int:
+        return 1200 if thinking else 800
 
     @classmethod
     def parse_json_response(cls, raw_text: str, fallback_fields: tuple[str, ...] = ()) -> Dict[str, Any]:

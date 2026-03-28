@@ -60,15 +60,69 @@ class PipelineOrchestrator:
         async with self._trace_step(trace, "fetch_openfoodfacts") as metadata:
             if pipeline_input.barcode:
                 try:
-                    off_payload = await self.off_client.fetch_product(pipeline_input.barcode)
-                    off_product = self.normalizer.normalize_off_payload(off_payload, barcode=pipeline_input.barcode)
-                    metadata["found"] = bool(off_payload)
+                    off_result = await self.off_client.fetch_product_result(
+                        pipeline_input.barcode,
+                        locale=pipeline_input.locale,
+                    )
+                    metadata["off_status"] = off_result.status
+                    metadata["http_status"] = off_result.http_status
+                    metadata["retry_count"] = off_result.meta.get("retry_count", 0)
+                    metadata["cache"] = off_result.meta.get("cache", "miss")
+                    metadata["reason_codes"] = []
+                    if "locale_hints" in off_result.meta:
+                        metadata["locale_hints"] = off_result.meta["locale_hints"]
+                    if "retry_after_seconds" in off_result.meta:
+                        metadata["retry_after_seconds"] = off_result.meta["retry_after_seconds"]
+
+                    if off_result.status == "ok":
+                        off_payload = {"status": 1, "product": off_result.product or {}}
+                        off_product, normalization_warnings = self.normalizer.normalize_off_payload_with_warnings(
+                            off_payload,
+                            barcode=pipeline_input.barcode,
+                        )
+                        metadata["found"] = bool(off_result.product)
+                        if normalization_warnings:
+                            metadata["normalization_warnings"] = normalization_warnings
+                    else:
+                        off_product = ProductData(
+                            barcode=pipeline_input.barcode,
+                            source="unknown",
+                            confidence=0.0,
+                        )
+                        metadata["found"] = False
+                        metadata["degraded"] = True
+                        metadata["error_code"] = off_result.error_code
+                        metadata["error"] = off_result.error_detail
+                        if off_result.status == "not_found":
+                            metadata["reason_codes"].append("off_not_found")
+                        elif off_result.status == "rate_limited":
+                            metadata["reason_codes"].append("off_rate_limited")
+                            if off_result.meta.get("retry_exhausted"):
+                                metadata["reason_codes"].append("off_retry_exhausted")
+                        elif off_result.status == "parse_error":
+                            metadata["reason_codes"].append("off_parse_error")
+                        else:
+                            metadata["reason_codes"].append("off_http_error")
+                            if off_result.meta.get("retry_exhausted"):
+                                metadata["reason_codes"].append("off_retry_exhausted")
                 except AppError as exc:
+                    off_product = ProductData(
+                        barcode=pipeline_input.barcode,
+                        source="unknown",
+                        confidence=0.0,
+                    )
                     metadata["error"] = exc.message
                     metadata["error_code"] = exc.error_code
+                    metadata["reason_codes"] = ["off_http_error"]
                     metadata["degraded"] = True
                 except Exception as exc:
+                    off_product = ProductData(
+                        barcode=pipeline_input.barcode,
+                        source="unknown",
+                        confidence=0.0,
+                    )
                     metadata["error"] = str(exc)
+                    metadata["reason_codes"] = ["off_http_error"]
                     metadata["degraded"] = True
             else:
                 metadata["reason"] = "barcode_not_provided"

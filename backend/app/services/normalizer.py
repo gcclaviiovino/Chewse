@@ -1,38 +1,99 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.schemas.pipeline import ProductData
 
 
 class ProductNormalizer:
     def normalize_off_payload(self, payload: Optional[Dict[str, Any]], barcode: Optional[str] = None) -> ProductData:
-        product = (payload or {}).get("product", payload or {})
-        nutriments = product.get("nutriments") or {}
-        return ProductData(
-            product_name=product.get("product_name") or product.get("generic_name"),
-            brand=product.get("brands"),
-            barcode=barcode or product.get("code"),
-            ingredients_text=product.get("ingredients_text"),
-            nutriments=self._normalize_nutriments(nutriments),
-            packaging=product.get("packaging"),
-            origins=product.get("origins"),
-            labels_tags=self._as_list(product.get("labels_tags")),
-            categories_tags=self._as_list(product.get("categories_tags")),
-            quantity=product.get("quantity"),
-            source="openfoodfacts" if product else "unknown",
-            confidence=0.85 if product else 0.1,
+        product, _warnings = self.normalize_off_payload_with_warnings(payload, barcode=barcode)
+        return product
+
+    def normalize_off_payload_with_warnings(
+        self, payload: Optional[Dict[str, Any]], barcode: Optional[str] = None
+    ) -> Tuple[ProductData, List[str]]:
+        warnings: List[str] = []
+        payload_dict = payload if isinstance(payload, dict) else {}
+        if payload is not None and not isinstance(payload, dict):
+            warnings.append("off_payload_not_object")
+
+        raw_product = payload_dict.get("product", payload_dict)
+        if not isinstance(raw_product, dict):
+            warnings.append("off_product_not_object")
+            raw_product = {}
+
+        nutriments = raw_product.get("nutriments")
+        if nutriments is None:
+            normalized_nutriments: Dict[str, Optional[Any]] = {}
+        elif isinstance(nutriments, dict):
+            normalized_nutriments = self._normalize_nutriments(nutriments)
+        else:
+            warnings.append("off_nutriments_not_object")
+            normalized_nutriments = {}
+
+        product_name = self._pick_string(raw_product, ("product_name", "generic_name"), warnings, "off_name_invalid")
+        brand = self._stringify_joined(raw_product.get("brands"), warnings, "off_brands_invalid")
+        normalized_barcode = self._normalize_barcode(barcode or raw_product.get("code"), warnings)
+        ingredients_text = self._coerce_string(raw_product.get("ingredients_text"), warnings, "off_ingredients_invalid")
+        packaging = self._stringify_joined(raw_product.get("packaging"), warnings, "off_packaging_invalid")
+        origins = self._coerce_string(raw_product.get("origins"), warnings, "off_origins_invalid")
+        labels_tags = self._as_list(raw_product.get("labels_tags"), warnings, "off_labels_invalid")
+        categories_tags = self._as_list(raw_product.get("categories_tags"), warnings, "off_categories_invalid")
+        quantity = self._coerce_string(raw_product.get("quantity"), warnings, "off_quantity_invalid")
+
+        confidence = self._compute_off_confidence(
+            product_name=product_name,
+            brand=brand,
+            barcode=normalized_barcode,
+            ingredients_text=ingredients_text,
+            nutriments=normalized_nutriments,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=labels_tags,
+            categories_tags=categories_tags,
+            quantity=quantity,
+        )
+
+        return (
+            ProductData(
+                product_name=product_name,
+                brand=brand,
+                barcode=normalized_barcode,
+                ingredients_text=ingredients_text,
+                eco_ingredient_signals=self._extract_eco_ingredient_signals(
+                    ingredients_text=ingredients_text,
+                    labels_tags=labels_tags,
+                ),
+                nutriments=normalized_nutriments,
+                packaging=packaging,
+                origins=origins,
+                labels_tags=labels_tags,
+                categories_tags=categories_tags,
+                quantity=quantity,
+                source="openfoodfacts",
+                confidence=confidence,
+            ),
+            warnings,
         )
 
     def normalize_llm_payload(self, payload: Optional[Dict[str, Any]], barcode: Optional[str] = None) -> ProductData:
         payload = payload or {}
+        normalized_nutriments = self._normalize_nutriments(payload.get("nutriments") or {})
+        normalized_nutriments = {
+            key: value for key, value in normalized_nutriments.items() if value is not None
+        }
         return ProductData(
             product_name=payload.get("product_name"),
             brand=payload.get("brand"),
             barcode=barcode or payload.get("barcode"),
             ingredients_text=payload.get("ingredients_text"),
-            nutriments=self._normalize_nutriments(payload.get("nutriments") or {}),
+            eco_ingredient_signals=self._extract_eco_ingredient_signals(
+                ingredients_text=self._coerce_string(payload.get("ingredients_text")),
+                labels_tags=self._as_list(payload.get("labels_tags")),
+            ),
+            nutriments=normalized_nutriments,
             packaging=payload.get("packaging"),
             origins=payload.get("origins"),
             labels_tags=self._as_list(payload.get("labels_tags")),
@@ -46,25 +107,149 @@ class ProductNormalizer:
     def _normalize_nutriments(nutriments: Dict[str, Any]) -> Dict[str, Optional[Any]]:
         normalized: Dict[str, Optional[Any]] = {}
         for key, value in nutriments.items():
+            normalized_key = str(key).strip()
+            if not normalized_key:
+                continue
             if isinstance(value, (int, float)) or value is None:
-                normalized[key] = value
+                normalized[normalized_key] = value
                 continue
             if isinstance(value, str):
                 try:
                     match = re.search(r"[-+]?\d+(?:[.,]\d+)?", value)
-                    normalized[key] = float(match.group(0).replace(",", ".")) if match else value.strip()
+                    normalized[normalized_key] = float(match.group(0).replace(",", ".")) if match else value.strip()
                 except ValueError:
-                    normalized[key] = value.strip()
+                    normalized[normalized_key] = value.strip()
                 continue
-            normalized[key] = str(value)
+            normalized[normalized_key] = str(value)
         return normalized
 
     @staticmethod
-    def _as_list(value: Any) -> List[str]:
+    def _pick_string(raw_product: Dict[str, Any], keys: tuple[str, ...], warnings: List[str], warning_code: str) -> Optional[str]:
+        for key in keys:
+            value = raw_product.get(key)
+            normalized = ProductNormalizer._coerce_string(value, warnings, warning_code)
+            if normalized:
+                return normalized
+        return None
+
+    @staticmethod
+    def _normalize_barcode(value: Any, warnings: List[str]) -> Optional[str]:
+        normalized = ProductNormalizer._coerce_string(value, warnings, "off_barcode_invalid")
+        if normalized is None:
+            return None
+        digits_only = re.sub(r"\s+", "", normalized)
+        return digits_only or None
+
+    @staticmethod
+    def _coerce_string(value: Any, warnings: Optional[List[str]] = None, warning_code: Optional[str] = None) -> Optional[str]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        if isinstance(value, (int, float)):
+            return str(value)
+        if warnings is not None and warning_code:
+            warnings.append(warning_code)
+        return None
+
+    @staticmethod
+    def _stringify_joined(value: Any, warnings: List[str], warning_code: str) -> Optional[str]:
+        if isinstance(value, str):
+            return value.strip() or None
+        if isinstance(value, list):
+            parts = [str(item).strip() for item in value if str(item).strip()]
+            return ", ".join(parts) if parts else None
+        if value is None:
+            return None
+        warnings.append(warning_code)
+        return str(value).strip() or None
+
+    @staticmethod
+    def _as_list(value: Any, warnings: Optional[List[str]] = None, warning_code: Optional[str] = None) -> List[str]:
         if value is None:
             return []
         if isinstance(value, list):
-            return [str(item) for item in value if str(item).strip()]
+            return [str(item).strip() for item in value if str(item).strip()]
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
-        return [str(value)]
+        if warnings is not None and warning_code:
+            warnings.append(warning_code)
+        coerced = str(value).strip()
+        return [coerced] if coerced else []
+
+    @staticmethod
+    def _compute_off_confidence(
+        *,
+        product_name: Optional[str],
+        brand: Optional[str],
+        barcode: Optional[str],
+        ingredients_text: Optional[str],
+        nutriments: Dict[str, Optional[Any]],
+        packaging: Optional[str],
+        origins: Optional[str],
+        labels_tags: List[str],
+        categories_tags: List[str],
+        quantity: Optional[str],
+    ) -> float:
+        completeness_signals = [
+            bool(product_name),
+            bool(brand),
+            bool(barcode),
+            bool(ingredients_text),
+            bool(nutriments),
+            bool(packaging),
+            bool(origins),
+            bool(labels_tags),
+            bool(categories_tags),
+            bool(quantity),
+        ]
+        score = sum(1 for item in completeness_signals if item) / len(completeness_signals)
+        return round(0.2 + (0.75 * score), 3) if any(completeness_signals) else 0.0
+
+    @staticmethod
+    def _extract_eco_ingredient_signals(ingredients_text: Optional[str], labels_tags: List[str]) -> List[Dict[str, Any]]:
+        signals: List[Dict[str, Any]] = []
+        normalized = (ingredients_text or "").lower()
+        signal_defs = [
+            ("beef", ("beef", "veal"), "high", True),
+            ("lamb", ("lamb",), "high", True),
+            ("milk", ("milk", "latte"), "medium_high", True),
+            ("cream", ("cream", "panna"), "high", True),
+            ("butter", ("butter", "burro"), "high", True),
+            ("cheese", ("cheese", "formaggio"), "high", True),
+            ("cocoa", ("cocoa", "cacao"), "medium_high", True),
+            ("coffee", ("coffee", "caffe"), "medium_high", True),
+            ("palm_oil", ("palm oil", "olio di palma", "palm"), "high", True),
+            ("rice", ("rice", "riso"), "medium", True),
+            ("almonds", ("almond", "mandor"), "medium", True),
+            ("fish", ("fish", "pesce", "salmone", "tonno"), "medium_high", True),
+            ("soy", ("soy", "soia"), "medium", True),
+        ]
+
+        for signal_id, tokens, impact_level, present_value in signal_defs:
+            if not normalized:
+                continue
+            if any(token in normalized for token in tokens):
+                signals.append(
+                    {
+                        "id": signal_id,
+                        "label": signal_id.replace("_", " "),
+                        "present": present_value,
+                        "impact_level": impact_level,
+                        "source": "ingredients_text",
+                    }
+                )
+
+        normalized_labels = [tag.lower() for tag in labels_tags]
+        if any("no-palm-oil" in tag for tag in normalized_labels) and not any(item["id"] == "palm_oil" for item in signals):
+            signals.append(
+                {
+                    "id": "palm_oil",
+                    "label": "palm oil",
+                    "present": False,
+                    "impact_level": "high",
+                    "source": "labels_tags",
+                }
+            )
+        return signals
