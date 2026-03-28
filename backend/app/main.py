@@ -226,6 +226,7 @@ async def upload_photo(payload: UploadPhotoRequest) -> UploadPhotoResponse:
 
     return UploadPhotoResponse(
         trace_id=output.trace_id,
+        barcode=output.product.barcode,
         name=output.product.product_name or "Prodotto sconosciuto",
         product_type=_infer_product_type(output.product.product_name),
         product_score=output.score.total_score,

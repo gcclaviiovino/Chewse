@@ -168,6 +168,7 @@ class PipelineOutput(BaseModel):
 
 class UploadPhotoResponse(BaseModel):
     trace_id: Optional[str] = None
+    barcode: Optional[str] = None
     name: str
     product_type: str
     product_score: int

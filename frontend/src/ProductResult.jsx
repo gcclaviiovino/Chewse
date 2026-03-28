@@ -11,12 +11,7 @@ const ProductResult = () => {
 
   const handleViewAlternative = () => {
     if (!productData) return
-
-    if (productData.better_choice) {
-      navigate('/product-comparison', { state: { product: productData, betterChoice: productData.better_choice } })
-    } else {
-      navigate('/choice', { state: { product: productData } })
-    }
+    navigate('/chat', { state: { product: productData } })
   }
 
   if (!productData) {

@@ -84,6 +84,7 @@ def test_upload_photo_endpoint_accepts_base64(api_client) -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["trace_id"]
+    assert "barcode" in payload
     assert payload["name"]
     assert 0 <= payload["product_score"] <= payload["max_score"]
     assert isinstance(payload["subscores"], dict)
