@@ -201,17 +201,22 @@ class FakeLLMClient(LLMClient):
         chat_history: list[dict[str, str]],
     ) -> dict:
         normalized = (user_message or "").strip().lower()
-        interpreted = await self.interpret_preferences(
-            prompt=prompt,
-            category=category,
-            user_message=user_message,
-            current_preferences_markdown=current_preferences_markdown,
-        )
+        memory_document = current_preferences_markdown or ""
+        sections: dict[str, list[str]] = {}
+        current_section: Optional[str] = None
+        for raw_line in memory_document.splitlines():
+            line = raw_line.strip()
+            if line.lower().startswith("## category:"):
+                current_section = line.split(":", 1)[1].strip().lower()
+                sections.setdefault(current_section, [])
+                continue
+            if current_section and line.startswith("- "):
+                sections[current_section].append(line)
         if any(token in normalized for token in ("cosa hai in memoria", "cosa hai salvato", "mostrami la memoria", "in memoria")):
-            if current_preferences_markdown and current_preferences_markdown.strip():
+            if memory_document.strip():
                 return {
                     "assistant_message": "Al momento ho salvato queste preferenze: {}.".format(
-                        current_preferences_markdown.replace("\n", ", ")
+                        memory_document.replace("\n", ", ")
                     ),
                     "should_update": False,
                     "final_preferences_markdown": "",
@@ -223,14 +228,76 @@ class FakeLLMClient(LLMClient):
                 "final_preferences_markdown": "",
                 "needs_preference_input": True,
             }
-        if interpreted.get("should_update"):
+
+        target_section = None
+        if "biscott" in normalized:
+            target_section = "breakfasts" if "breakfasts" in sections else "biscuits"
+        elif "colazione" in normalized or "breakfast" in normalized:
+            target_section = "breakfasts"
+        elif "snack" in normalized:
+            target_section = "snacks"
+        elif "past" in normalized:
+            target_section = "pasta"
+        elif "pan" in normalized:
+            target_section = "bread"
+        elif "dolc" in normalized or "dessert" in normalized:
+            target_section = "desserts"
+        elif "cereal" in normalized:
+            target_section = "cereals"
+        elif "frutt" in normalized:
+            target_section = "fruits"
+        elif "verdur" in normalized:
+            target_section = "vegetables"
+        elif "legum" in normalized:
+            target_section = "legumes"
+        elif "latticin" in normalized or "formagg" in normalized:
+            target_section = "dairy"
+        elif "pesce" in normalized:
+            target_section = "fish"
+        elif "carne" in normalized:
+            target_section = "meat"
+        elif "crem" in normalized or "spalm" in normalized:
+            target_section = "spreads"
+        elif len(sections) == 1:
+            target_section = next(iter(sections.keys()))
+
+        if target_section is None:
+            if sections:
+                return {
+                    "assistant_message": "Dimmi per quale categoria vuoi aggiornare le preferenze.",
+                    "should_update": False,
+                    "final_preferences_markdown": "",
+                    "needs_preference_input": False,
+                }
             return {
-                "assistant_message": "Ho aggiornato la memoria delle tue preferenze generali.",
+                "assistant_message": "Non ho ancora categorie in memoria. Scansiona prima un prodotto o indica chiaramente una categoria.",
+                "should_update": False,
+                "final_preferences_markdown": "",
+                "needs_preference_input": True,
+            }
+
+        interpreted = await self.interpret_preferences(
+            prompt=prompt,
+            category=target_section,
+            user_message=user_message,
+            current_preferences_markdown="\n".join(sections.get(target_section, [])),
+        )
+        if interpreted.get("should_update"):
+            sections[target_section] = [line for line in interpreted.get("final_preferences_markdown", "").splitlines() if line.strip()]
+            ordered_lines: list[str] = []
+            for section_name in sorted(sections.keys()):
+                if not sections[section_name]:
+                    continue
+                ordered_lines.append(f"## category: {section_name}")
+                ordered_lines.extend(sections[section_name])
+                ordered_lines.append("")
+            return {
+                "assistant_message": "Ho aggiornato la memoria delle tue preferenze per la categoria {}.".format(target_section),
                 "should_update": True,
-                "final_preferences_markdown": interpreted.get("final_preferences_markdown", ""),
+                "final_preferences_markdown": "\n".join(ordered_lines).strip(),
                 "needs_preference_input": False,
             }
-        if current_preferences_markdown and current_preferences_markdown.strip():
+        if memory_document.strip():
             return {
                 "assistant_message": "Ho letto la memoria attuale. Se vuoi posso modificarla.",
                 "should_update": False,

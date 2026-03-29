@@ -41,9 +41,7 @@ class AlternativesService:
 
         category = self._infer_preference_category(pipeline_output.product)
         user_id = self._resolve_user_id(request.user_id)
-        global_memory_markdown = self.preferences_memory.load_global_preferences(user_id)
         memory_markdown = self.preferences_memory.load_category_preferences(user_id, category)
-        merged_memory_markdown = self._merge_preferences_markdown(global_memory_markdown, memory_markdown)
 
         preference_source = "none"
         active_preferences_markdown = None
@@ -56,17 +54,17 @@ class AlternativesService:
             interpreted = await self.preference_interpreter.interpret(
                 category=category,
                 user_message=request.user_message,
-                current_preferences_markdown=merged_memory_markdown,
+                current_preferences_markdown=memory_markdown,
             )
             if interpreted.should_update and interpreted.final_preferences_markdown:
                 active_preferences_markdown = interpreted.final_preferences_markdown
                 preference_source = "user_message_extracted"
                 self.preferences_memory.upsert_category_preferences(user_id, category, active_preferences_markdown)
-            elif merged_memory_markdown and merged_memory_markdown.strip():
-                active_preferences_markdown = merged_memory_markdown.strip()
+            elif memory_markdown and memory_markdown.strip():
+                active_preferences_markdown = memory_markdown.strip()
                 preference_source = "memory_markdown"
-        elif merged_memory_markdown and merged_memory_markdown.strip():
-            active_preferences_markdown = merged_memory_markdown.strip()
+        elif memory_markdown and memory_markdown.strip():
+            active_preferences_markdown = memory_markdown.strip()
             preference_source = "memory_markdown"
 
         candidate_suggestions = list(pipeline_output.rag_suggestions)
@@ -453,25 +451,6 @@ class AlternativesService:
     def _resolve_user_id(user_id: Optional[str]) -> str:
         value = (user_id or "").strip()
         return value or "mvp-default-user"
-
-    @staticmethod
-    def _merge_preferences_markdown(*blocks: Optional[str]) -> Optional[str]:
-        merged: list[str] = []
-        seen: set[str] = set()
-        for block in blocks:
-            if not block or not block.strip():
-                continue
-            for raw_line in block.splitlines():
-                line = raw_line.strip()
-                if not line:
-                    continue
-                normalized = line if line.startswith("- ") else "- {}".format(line.lstrip("- ").strip())
-                lowered = normalized.lower()
-                if lowered in seen:
-                    continue
-                seen.add(lowered)
-                merged.append(normalized)
-        return "\n".join(merged) if merged else None
 
     @staticmethod
     def _build_assistant_message(

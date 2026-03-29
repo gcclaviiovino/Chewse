@@ -19,7 +19,6 @@ class PreferencesMemoryService:
     """Simple markdown-based preference memory for MVP usage."""
 
     _SECTION_PATTERN = re.compile(r"^##\s*category:\s*(.+?)\s*$", re.IGNORECASE)
-    GLOBAL_CATEGORY = "generic"
 
     def __init__(self, backend_dir: Path) -> None:
         self.base_dir = backend_dir / "data" / "agent_memory"
@@ -28,9 +27,6 @@ class PreferencesMemoryService:
     def load_category_preferences(self, user_id: str, category: str) -> Optional[str]:
         sections = self._read_sections(user_id)
         return sections.get(self._normalize_category(category))
-
-    def load_global_preferences(self, user_id: str) -> Optional[str]:
-        return self.load_category_preferences(user_id, self.GLOBAL_CATEGORY)
 
     def load_all_preferences(self, user_id: str) -> Dict[str, str]:
         return dict(self._read_sections(user_id))
@@ -47,9 +43,6 @@ class PreferencesMemoryService:
         sections[normalized_category] = self._normalize_markdown_block(markdown_block)
         self._write_sections(user_id, sections)
 
-    def upsert_global_preferences(self, user_id: str, markdown_block: str) -> None:
-        self.upsert_category_preferences(user_id, self.GLOBAL_CATEGORY, markdown_block)
-
     def delete_category_preferences(self, user_id: str, category: str) -> None:
         sections = self._read_sections(user_id)
         normalized_category = self._normalize_category(category)
@@ -58,8 +51,9 @@ class PreferencesMemoryService:
         sections.pop(normalized_category, None)
         self._write_sections(user_id, sections)
 
-    def delete_global_preferences(self, user_id: str) -> None:
-        self.delete_category_preferences(user_id, self.GLOBAL_CATEGORY)
+    def replace_memory_document(self, user_id: str, memory_document: str) -> None:
+        sections = self._read_sections_from_text(memory_document)
+        self._write_sections(user_id, sections)
 
     def has_category_preferences(self, user_id: str, category: str) -> bool:
         data = self.load_category_preferences(user_id, category)
@@ -67,8 +61,6 @@ class PreferencesMemoryService:
 
     @staticmethod
     def _normalize_category(category: str) -> str:
-        if (category or "").strip().lower() in {PreferencesMemoryService.GLOBAL_CATEGORY, "generics"}:
-            return PreferencesMemoryService.GLOBAL_CATEGORY
         normalized = canonicalize_category(category)
         return normalized or "unknown"
 
@@ -110,11 +102,15 @@ class PreferencesMemoryService:
         if not path.exists():
             return {}
 
+        return self._read_sections_from_text(path.read_text(encoding="utf-8"))
+
+    def _read_sections_from_text(self, raw_text: str) -> Dict[str, str]:
+
         sections: Dict[str, str] = {}
         current_key: Optional[str] = None
         current_lines: list[str] = []
 
-        for raw_line in path.read_text(encoding="utf-8").splitlines():
+        for raw_line in raw_text.splitlines():
             header_match = self._SECTION_PATTERN.match(raw_line.strip())
             if header_match:
                 if current_key and current_lines:
