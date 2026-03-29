@@ -17,6 +17,7 @@ from app.services.llm_client import LLMClient
 from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.pipeline_orchestrator import PipelineOrchestrator
+from app.services.preference_interpreter import PreferenceInterpreter
 from app.services.rag_service import RagService
 from app.services.scoring_engine import ScoringEngine
 
@@ -99,6 +100,148 @@ class FakeLLMClient(LLMClient):
         return {
             "accepted_sources": accepted_sources,
             "rejected_sources": rejected_sources,
+        }
+
+    async def interpret_preferences(
+        self,
+        *,
+        prompt: str,
+        category: str,
+        user_message: str,
+        current_preferences_markdown: Optional[str],
+    ) -> dict:
+        normalized = (user_message or "").strip().lower()
+        current_lines = [
+            line.strip()
+            for line in (current_preferences_markdown or "").splitlines()
+            if line.strip().startswith("- ")
+        ]
+
+        if not normalized or any(token in normalized for token in ("ciao", "grazie", "ok grazie")):
+            return {"should_update": False, "final_preferences_markdown": ""}
+
+        if any(token in normalized for token in ("nessuna preferenza", "nessuna", "no preference", "no preferences")):
+            return {"should_update": True, "final_preferences_markdown": "- nessuna preferenza"}
+
+        preferences = [line for line in current_lines if line.lower() != "- nessuna preferenza"]
+        mapping = {
+            "- vegan": {
+                "add": ("vegano", "vegana", "vegan"),
+                "remove": ("non sono piu vegana", "non sono più vegana", "non piu vegano", "non più vegano", "togli vegan", "rimuovi vegan"),
+            },
+            "- vegetarian": {
+                "add": ("vegetar", "vegetarian"),
+                "remove": ("non sono piu vegetariana", "non sono più vegetariana", "togli vegetarian", "rimuovi vegetarian"),
+            },
+            "- no dairy": {
+                "add": ("intollerante al lattosio", "no lattosio", "senza lattosio", "lactose", "no dairy", "senza latte"),
+                "remove": ("togli no dairy", "rimuovi no dairy", "tolgo il no lattosio"),
+            },
+            "- no gluten": {
+                "add": ("glutine", "gluten", "celiac", "celiaco"),
+                "remove": ("togli no gluten", "rimuovi no gluten"),
+            },
+            "- no nuts": {
+                "add": ("arachidi", "peanut", "frutta a guscio", "nuts"),
+                "remove": ("togli no nuts", "rimuovi no nuts"),
+            },
+            "- no fish": {
+                "add": ("pesce", "fish", "seafood"),
+                "remove": ("togli no fish", "rimuovi no fish"),
+            },
+            "- no beef": {
+                "add": ("manzo", "beef"),
+                "remove": ("togli no beef", "rimuovi no beef"),
+            },
+            "- no pork": {
+                "add": ("maiale", "pork"),
+                "remove": ("togli no pork", "rimuovi no pork"),
+            },
+            "- no palm oil": {
+                "add": ("palma", "palm oil"),
+                "remove": ("togli no palm oil", "rimuovi no palm oil"),
+            },
+            "- no sugar": {
+                "add": ("zucchero", "sugar"),
+                "remove": ("togli no sugar", "rimuovi no sugar"),
+            },
+            "- senza plastica": {
+                "add": ("senza plastica", "plastic free", "plastic-free", "no plastic"),
+                "remove": ("togli senza plastica", "rimuovi senza plastica"),
+            },
+            "- solo bio": {
+                "add": ("solo bio", "biologico", "organic only", "only organic"),
+                "remove": ("togli solo bio", "rimuovi solo bio"),
+            },
+        }
+
+        changed = False
+        for bullet, directives in mapping.items():
+            if any(token in normalized for token in directives["remove"]):
+                if bullet in preferences:
+                    preferences.remove(bullet)
+                    changed = True
+                continue
+            if any(token in normalized for token in directives["add"]) and bullet not in preferences:
+                preferences.append(bullet)
+                changed = True
+
+        if not changed:
+            return {"should_update": False, "final_preferences_markdown": ""}
+
+        return {"should_update": True, "final_preferences_markdown": "\n".join(preferences)}
+
+    async def run_preferences_chat_turn(
+        self,
+        *,
+        prompt: str,
+        category: str,
+        user_message: str,
+        current_preferences_markdown: Optional[str],
+        chat_history: list[dict[str, str]],
+    ) -> dict:
+        normalized = (user_message or "").strip().lower()
+        interpreted = await self.interpret_preferences(
+            prompt=prompt,
+            category=category,
+            user_message=user_message,
+            current_preferences_markdown=current_preferences_markdown,
+        )
+        if any(token in normalized for token in ("cosa hai in memoria", "cosa hai salvato", "mostrami la memoria", "in memoria")):
+            if current_preferences_markdown and current_preferences_markdown.strip():
+                return {
+                    "assistant_message": "Al momento ho salvato queste preferenze: {}.".format(
+                        current_preferences_markdown.replace("\n", ", ")
+                    ),
+                    "should_update": False,
+                    "final_preferences_markdown": "",
+                    "needs_preference_input": False,
+                }
+            return {
+                "assistant_message": "Al momento non ho preferenze salvate. Se vuoi, dimmele e le registro.",
+                "should_update": False,
+                "final_preferences_markdown": "",
+                "needs_preference_input": True,
+            }
+        if interpreted.get("should_update"):
+            return {
+                "assistant_message": "Ho aggiornato la memoria delle tue preferenze generali.",
+                "should_update": True,
+                "final_preferences_markdown": interpreted.get("final_preferences_markdown", ""),
+                "needs_preference_input": False,
+            }
+        if current_preferences_markdown and current_preferences_markdown.strip():
+            return {
+                "assistant_message": "Ho letto la memoria attuale. Se vuoi posso modificarla.",
+                "should_update": False,
+                "final_preferences_markdown": "",
+                "needs_preference_input": False,
+            }
+        return {
+            "assistant_message": "Dimmi pure le preferenze che vuoi salvare.",
+            "should_update": False,
+            "final_preferences_markdown": "",
+            "needs_preference_input": True,
         }
 
 
@@ -184,6 +327,7 @@ def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
     from app.pipeline import build_orchestrator
     from app.services.alternatives_service import AlternativesService
     from app.services.impact_translator import ImpactTranslator
+    from app.services.preferences_chat_service import PreferencesChatService
     from app.services.preferences_evaluator import PreferencesEvaluator
     from app.services.preferences_memory import PreferencesMemoryService
 
@@ -198,6 +342,19 @@ def api_client(monkeypatch, orchestrator, settings: Settings) -> TestClient:
             preferences_evaluator=PreferencesEvaluator(),
             impact_translator=ImpactTranslator(),
             preferences_memory=PreferencesMemoryService(settings.off_data_dir.parent),
+            preference_interpreter=PreferenceInterpreter(
+                llm_client=FakeLLMClient(settings),
+                prompt_path=settings.backend_dir / "app" / "prompts" / "manage_preferences.md",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        app_main,
+        "build_preferences_chat_service",
+        lambda: PreferencesChatService(
+            preferences_memory=PreferencesMemoryService(settings.off_data_dir.parent),
+            llm_client=FakeLLMClient(settings),
+            prompt_path=settings.backend_dir / "app" / "prompts" / "preferences_chat_turn.md",
         ),
     )
     with TestClient(app) as client:

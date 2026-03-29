@@ -236,3 +236,17 @@ class AlternativesResponse(BaseModel):
     applied_preferences_markdown: Optional[str] = None
     needs_preference_input: bool = False
     assistant_message: Optional[str] = None
+
+
+class PreferencesChatRequest(BaseModel):
+    user_id: Optional[str] = None
+    user_message: Optional[str] = None
+    chat_history: List[Dict[str, str]] = Field(default_factory=list)
+
+
+class PreferencesChatResponse(BaseModel):
+    preference_source: Literal["none", "memory_markdown", "user_message_extracted"] = "none"
+    preference_category: Optional[str] = None
+    applied_preferences_markdown: Optional[str] = None
+    needs_preference_input: bool = False
+    assistant_message: Optional[str] = None

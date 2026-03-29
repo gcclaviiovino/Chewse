@@ -5,12 +5,15 @@ const ChatbotPage = () => {
   const navigate = useNavigate()
   const location = useLocation()
   const productData = location.state?.product
+  const chatMode = location.state?.mode === 'product' ? 'product' : 'generic'
+  const hasProductContext = Boolean(productData?.barcode || productData?.name)
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isLoading, setIsLoading] = useState(true)
   const [alternatives, setAlternatives] = useState(null)
-  const [needsFirstInput, setNeedsFirstInput] = useState(false)
+  const [needsPreferenceInput, setNeedsPreferenceInput] = useState(false)
+  const [savedPreferences, setSavedPreferences] = useState(null)
   const messagesEndRef = useRef(null)
   const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
   const userId = 'mvp-default-user'
@@ -23,26 +26,94 @@ const ChatbotPage = () => {
     scrollToBottom()
   }, [messages])
 
-  // Fetch initial alternatives when component mounts
   useEffect(() => {
-    if (!productData?.barcode && !productData?.name) {
-      setMessages([
-        {
-          id: 1,
-          text: 'Non riesco a identificare questo prodotto in modo affidabile. Riprova la scansione inquadrando bene fronte e barcode.',
-          sender: 'bot'
-        }
-      ])
-      setIsLoading(false)
-      return
-    }
-
     const initializeChat = async () => {
       try {
-        const response = await fetch(`${apiBaseUrl}/alternatives/from-barcode`, {
+        if (chatMode === 'product') {
+          if (!hasProductContext) {
+            setMessages([
+              {
+                id: 1,
+                text: 'Non riesco a identificare questo prodotto in modo affidabile. Riprova la scansione inquadrando bene fronte e barcode.',
+                sender: 'bot'
+              }
+            ])
+            setIsLoading(false)
+            return
+          }
+
+          const response = await fetch(`${apiBaseUrl}/alternatives/from-barcode`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              barcode: productData.barcode,
+              product_name: productData.name,
+              brand: productData.brand,
+              ingredients_text: productData.ingredients_text,
+              packaging: productData.packaging,
+              origins: productData.origins,
+              labels_tags: productData.labels_tags || [],
+              categories_tags: productData.categories_tags || [],
+              quantity: productData.quantity,
+              locale: 'it-IT',
+              user_id: userId,
+            }),
+          })
+
+          if (!response.ok) throw new Error('Failed to fetch alternatives')
+          const data = await response.json()
+          setAlternatives(data)
+          setSavedPreferences(data.applied_preferences_markdown || null)
+          setNeedsPreferenceInput(data.needs_preference_input)
+          setMessages([{
+            id: 1,
+            text: data.assistant_message || 'Perfetto! Ecco le alternative disponibili.',
+            sender: 'bot'
+          }])
+          return
+        }
+
+        const response = await fetch(`${apiBaseUrl}/preferences/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+          body: JSON.stringify({ user_id: userId }),
+        })
+
+        if (!response.ok) throw new Error('Failed to fetch preferences chat')
+        const data = await response.json()
+        setSavedPreferences(data.applied_preferences_markdown || null)
+        setNeedsPreferenceInput(data.needs_preference_input)
+        setMessages([{
+          id: 1,
+          text: data.assistant_message || 'Dimmi le tue preferenze.',
+          sender: 'bot'
+        }])
+      } catch (error) {
+        console.error('Error initializing chat:', error)
+        setMessages([{ id: 1, text: 'Errore nella comunicazione con il server.', sender: 'bot' }])
+      } finally {
+        setIsLoading(false)
+      }
+    }
+
+    initializeChat()
+  }, [apiBaseUrl, chatMode, hasProductContext, productData])
+
+  const handleSendMessage = async () => {
+    if (inputValue.trim() === '') return
+
+    const trimmedInput = inputValue.trim()
+    const userMessage = { id: messages.length + 1, text: trimmedInput, sender: 'user' }
+    setMessages([...messages, userMessage])
+    setInputValue('')
+
+    setIsLoading(true)
+    try {
+      const requestUrl = chatMode === 'product'
+        ? `${apiBaseUrl}/alternatives/from-barcode`
+        : `${apiBaseUrl}/preferences/chat`
+      const requestBody = chatMode === 'product'
+        ? {
             barcode: productData.barcode,
             product_name: productData.name,
             brand: productData.brand,
@@ -54,72 +125,34 @@ const ChatbotPage = () => {
             quantity: productData.quantity,
             locale: 'it-IT',
             user_id: userId,
-          }),
-        })
+            user_message: inputValue,
+          }
+        : {
+            user_id: userId,
+            user_message: trimmedInput,
+            chat_history: messages.map((message) => ({
+              role: message.sender === 'bot' ? 'assistant' : 'user',
+              content: message.text,
+            })),
+          }
 
-        if (!response.ok) throw new Error('Failed to fetch alternatives')
-        const data = await response.json()
-        setAlternatives(data)
-
-        const botMessage = {
-          id: 1,
-          text: data.assistant_message || 'Perfetto! Ecco le alternative disponibili.',
-          sender: 'bot'
-        }
-        setMessages([botMessage])
-        setNeedsFirstInput(data.needs_preference_input)
-      } catch (error) {
-        console.error('Error fetching alternatives:', error)
-        setMessages([{ id: 1, text: 'Errore nella comunicazione con il server.', sender: 'bot' }])
-      } finally {
-        setIsLoading(false)
-      }
-    }
-
-    initializeChat()
-  }, [productData, apiBaseUrl])
-
-  const handleSendMessage = async () => {
-    if (inputValue.trim() === '') return
-
-    const userMessage = { id: messages.length + 1, text: inputValue, sender: 'user' }
-    setMessages([...messages, userMessage])
-    setInputValue('')
-
-    if (!needsFirstInput) {
-      // Preferences already collected, show alternatives
-      return
-    }
-
-    setIsLoading(true)
-    try {
-      const response = await fetch(`${apiBaseUrl}/alternatives/from-barcode`, {
+      const response = await fetch(requestUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          barcode: productData.barcode,
-          product_name: productData.name,
-          brand: productData.brand,
-          ingredients_text: productData.ingredients_text,
-          packaging: productData.packaging,
-          origins: productData.origins,
-          labels_tags: productData.labels_tags || [],
-          categories_tags: productData.categories_tags || [],
-          quantity: productData.quantity,
-          locale: 'it-IT',
-          user_id: userId,
-          user_message: inputValue,
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) throw new Error('Failed to process preferences')
       const data = await response.json()
-      setAlternatives(data)
-      setNeedsFirstInput(data.needs_preference_input)
+      setNeedsPreferenceInput(data.needs_preference_input)
+      setSavedPreferences(data.applied_preferences_markdown || null)
+      if (chatMode === 'product') {
+        setAlternatives(data)
+      }
 
       const botMessage = {
         id: messages.length + 2,
-        text: data.assistant_message || 'Ho aggiornato le alternative in base alle tue preferenze.',
+        text: data.assistant_message || 'Ho aggiornato le tue preferenze.',
         sender: 'bot'
       }
       setMessages(prev => [...prev, botMessage])
@@ -155,7 +188,7 @@ const ChatbotPage = () => {
     }
   }
 
-  if (!productData) {
+  if (chatMode === 'product' && !productData) {
     return (
       <main className="min-h-screen flex flex-col bg-gray-50">
         <div className="flex items-center justify-between bg-[var(--color-green)] px-6 py-4 text-white shadow-lg">
@@ -181,7 +214,9 @@ const ChatbotPage = () => {
     <main className="min-h-screen flex flex-col bg-gray-50">
       {/* Header */}
       <div className="flex items-center justify-between bg-[var(--color-green)] px-6 py-4 text-white shadow-lg">
-        <h1 className="text-xl font-semibold">Assistente Alternativa</h1>
+        <h1 className="text-xl font-semibold">
+          {chatMode === 'product' ? 'Assistente Alternativa' : 'Le tue preferenze'}
+        </h1>
         <button
           onClick={() => navigate('/home')}
           className="text-2xl font-bold hover:opacity-80 transition"
@@ -218,8 +253,21 @@ const ChatbotPage = () => {
         <div ref={messagesEndRef} />
       </div>
 
+      {savedPreferences && (
+        <div className="border-t border-gray-200 bg-[var(--color-cream)] px-4 py-3">
+          <div className="mx-auto max-w-md">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-[var(--color-green)]">
+              Preferenze salvate
+            </p>
+            <pre className="whitespace-pre-wrap rounded-2xl border border-[var(--color-green)] bg-white px-4 py-3 text-sm text-[var(--color-primary)]">
+              {savedPreferences}
+            </pre>
+          </div>
+        </div>
+      )}
+
       {/* Alternatives Display */}
-      {!needsFirstInput && alternatives && alternatives.candidates && alternatives.candidates.length > 0 && (
+      {chatMode === 'product' && !needsPreferenceInput && alternatives && alternatives.candidates && alternatives.candidates.length > 0 && (
         <div className="border-t border-gray-200 bg-white p-4 shadow-lg">
           <div className="mx-auto max-w-md space-y-3">
             <h3 className="text-sm font-semibold text-[var(--color-green)]">Alternative disponibili:</h3>
@@ -254,28 +302,30 @@ const ChatbotPage = () => {
       )}
 
       {/* Input Area */}
-      {needsFirstInput && (
-        <div className="border-t border-gray-200 bg-white p-4 shadow-lg">
-          <div className="mx-auto max-w-md flex gap-3">
-            <input
-              type="text"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyPress={handleKeyPress}
-              placeholder="Es. vegano, no lattosio, senza plastica..."
-              disabled={isLoading}
-              className="flex-1 rounded-full border-2 border-[var(--color-green)] bg-transparent px-4 py-3 text-sm outline-none transition focus:border-[var(--color-lime)] disabled:opacity-50"
-            />
-            <button
-              onClick={handleSendMessage}
-              disabled={inputValue.trim() === '' || isLoading}
-              className="rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Invia
-            </button>
-          </div>
+      <div className="border-t border-gray-200 bg-white p-4 shadow-lg">
+        <div className="mx-auto max-w-md flex gap-3">
+          <input
+            type="text"
+            value={inputValue}
+            onChange={(e) => setInputValue(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder={
+              chatMode === 'product'
+                ? 'Es. vegano, no lattosio, senza plastica...'
+                : 'Es. sono vegana, no glutine, solo bio...'
+            }
+            disabled={isLoading}
+            className="flex-1 rounded-full border-2 border-[var(--color-green)] bg-transparent px-4 py-3 text-sm outline-none transition focus:border-[var(--color-lime)] disabled:opacity-50"
+          />
+          <button
+            onClick={handleSendMessage}
+            disabled={inputValue.trim() === '' || isLoading}
+            className="rounded-full bg-[var(--color-green)] px-6 py-3 font-semibold text-white transition hover:bg-[var(--color-primary)] disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Invia
+          </button>
         </div>
-      )}
+      </div>
     </main>
   )
 }

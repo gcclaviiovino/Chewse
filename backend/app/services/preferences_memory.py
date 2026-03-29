@@ -19,6 +19,7 @@ class PreferencesMemoryService:
     """Simple markdown-based preference memory for MVP usage."""
 
     _SECTION_PATTERN = re.compile(r"^##\s*category:\s*(.+?)\s*$", re.IGNORECASE)
+    GLOBAL_CATEGORY = "generic"
 
     def __init__(self, backend_dir: Path) -> None:
         self.base_dir = backend_dir / "data" / "agent_memory"
@@ -28,6 +29,16 @@ class PreferencesMemoryService:
         sections = self._read_sections(user_id)
         return sections.get(self._normalize_category(category))
 
+    def load_global_preferences(self, user_id: str) -> Optional[str]:
+        return self.load_category_preferences(user_id, self.GLOBAL_CATEGORY)
+
+    def load_all_preferences(self, user_id: str) -> Dict[str, str]:
+        return dict(self._read_sections(user_id))
+
+    def render_memory_document(self, user_id: str) -> Optional[str]:
+        sections = self.load_all_preferences(user_id)
+        return self._render_sections_document(sections)
+
     def upsert_category_preferences(self, user_id: str, category: str, markdown_block: str) -> None:
         if not markdown_block or not markdown_block.strip():
             return
@@ -36,12 +47,28 @@ class PreferencesMemoryService:
         sections[normalized_category] = self._normalize_markdown_block(markdown_block)
         self._write_sections(user_id, sections)
 
+    def upsert_global_preferences(self, user_id: str, markdown_block: str) -> None:
+        self.upsert_category_preferences(user_id, self.GLOBAL_CATEGORY, markdown_block)
+
+    def delete_category_preferences(self, user_id: str, category: str) -> None:
+        sections = self._read_sections(user_id)
+        normalized_category = self._normalize_category(category)
+        if normalized_category not in sections:
+            return
+        sections.pop(normalized_category, None)
+        self._write_sections(user_id, sections)
+
+    def delete_global_preferences(self, user_id: str) -> None:
+        self.delete_category_preferences(user_id, self.GLOBAL_CATEGORY)
+
     def has_category_preferences(self, user_id: str, category: str) -> bool:
         data = self.load_category_preferences(user_id, category)
         return bool(data and data.strip())
 
     @staticmethod
     def _normalize_category(category: str) -> str:
+        if (category or "").strip().lower() in {PreferencesMemoryService.GLOBAL_CATEGORY, "generics"}:
+            return PreferencesMemoryService.GLOBAL_CATEGORY
         normalized = canonicalize_category(category)
         return normalized or "unknown"
 
@@ -60,8 +87,26 @@ class PreferencesMemoryService:
         safe_user_id = self._normalize_user_id(user_id)
         return self.base_dir / "{}.md".format(safe_user_id)
 
+    def _nested_memory_path(self, user_id: str) -> Path:
+        safe_user_id = self._normalize_user_id(user_id)
+        return self.base_dir / safe_user_id / "memory.md"
+
     def _read_sections(self, user_id: str) -> Dict[str, str]:
-        path = self._memory_path(user_id)
+        primary_path = self._memory_path(user_id)
+        nested_path = self._nested_memory_path(user_id)
+
+        if primary_path.exists():
+            return self._read_sections_from_path(primary_path)
+
+        if nested_path.exists():
+            sections = self._read_sections_from_path(nested_path)
+            if sections:
+                self._write_sections(user_id, sections)
+            return sections
+
+        return {}
+
+    def _read_sections_from_path(self, path: Path) -> Dict[str, str]:
         if not path.exists():
             return {}
 
@@ -87,6 +132,25 @@ class PreferencesMemoryService:
 
     def _write_sections(self, user_id: str, sections: Dict[str, str]) -> None:
         path = self._memory_path(user_id)
+        rendered = self._render_sections_file(sections)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(rendered, encoding="utf-8")
+
+    @classmethod
+    def _render_sections_document(cls, sections: Dict[str, str]) -> Optional[str]:
+        lines: list[str] = []
+        for key in sorted(sections.keys()):
+            value = (sections[key] or "").strip()
+            if not value:
+                continue
+            lines.append("## category: {}".format(key))
+            lines.append(value)
+            lines.append("")
+        rendered = "\n".join(lines).strip()
+        return rendered or None
+
+    @classmethod
+    def _render_sections_file(cls, sections: Dict[str, str]) -> str:
         lines: list[str] = ["# User preferences memory", ""]
         lines.append("Last updated: {}".format(datetime.now(timezone.utc).isoformat()))
         lines.append("")
@@ -99,5 +163,4 @@ class PreferencesMemoryService:
             lines.append(value)
             lines.append("")
 
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+        return "\n".join(lines).strip() + "\n"

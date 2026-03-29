@@ -18,8 +18,8 @@ from app.core.errors import AppError, ErrorEnvelope
 from app.core.logger import configure_logging
 from app.core.observability import generate_trace_id, get_trace_id, log_event, redact_data, safe_debug_trace, set_trace_id
 from app.core.settings import get_settings
-from app.pipeline import build_alternatives_service, build_orchestrator
-from app.schemas.pipeline import AlternativesRequest, AlternativesResponse, PipelineInput, PipelineOutput, ProductData, ScoreResult, ScoreTransparency, UploadPhotoResponse
+from app.pipeline import build_alternatives_service, build_orchestrator, build_preferences_chat_service
+from app.schemas.pipeline import AlternativesRequest, AlternativesResponse, PipelineInput, PipelineOutput, PreferencesChatRequest, PreferencesChatResponse, ProductData, ScoreResult, ScoreTransparency, UploadPhotoResponse
 
 settings = get_settings()
 configure_logging(settings.log_level)
@@ -258,6 +258,12 @@ async def pipeline_run(payload: PipelineInput) -> PipelineOutput:
 async def alternatives_from_barcode(payload: AlternativesRequest) -> AlternativesResponse:
     service = build_alternatives_service()
     return await service.get_alternatives(payload)
+
+
+@app.post("/preferences/chat", response_model=PreferencesChatResponse)
+async def preferences_chat(payload: PreferencesChatRequest) -> PreferencesChatResponse:
+    service = build_preferences_chat_service()
+    return await service.handle_chat(payload)
 
 
 @app.post("/api/upload-photo", response_model=UploadPhotoResponse)

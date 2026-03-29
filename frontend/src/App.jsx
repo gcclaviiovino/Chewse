@@ -358,7 +358,7 @@ function HomePage() {
 
         {/* Floating Chat Button */}
         <button
-          onClick={() => navigate('/chat')}
+          onClick={() => navigate('/chat', { state: { mode: 'generic' } })}
           className="fixed bottom-6 right-6 h-16 w-16 rounded-full shadow-lg transition hover:shadow-xl active:scale-95"
           aria-label="Open chat"
         >

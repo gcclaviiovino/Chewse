@@ -16,6 +16,7 @@ from app.schemas.pipeline import (
 from app.services.category_normalizer import canonicalize_category, select_primary_category
 from app.services.impact_translator import ImpactTranslator
 from app.services.pipeline_orchestrator import PipelineOrchestrator
+from app.services.preference_interpreter import PreferenceInterpreter
 from app.services.preferences_evaluator import PreferencesEvaluator
 from app.services.preferences_memory import PreferencesMemoryService
 
@@ -27,18 +28,22 @@ class AlternativesService:
         preferences_evaluator: PreferencesEvaluator,
         impact_translator: ImpactTranslator,
         preferences_memory: PreferencesMemoryService,
+        preference_interpreter: PreferenceInterpreter,
     ) -> None:
         self.orchestrator = orchestrator
         self.preferences_evaluator = preferences_evaluator
         self.impact_translator = impact_translator
         self.preferences_memory = preferences_memory
+        self.preference_interpreter = preference_interpreter
 
     async def get_alternatives(self, request: AlternativesRequest) -> AlternativesResponse:
         pipeline_output = await self._build_pipeline_output(request)
 
         category = self._infer_preference_category(pipeline_output.product)
         user_id = self._resolve_user_id(request.user_id)
+        global_memory_markdown = self.preferences_memory.load_global_preferences(user_id)
         memory_markdown = self.preferences_memory.load_category_preferences(user_id, category)
+        merged_memory_markdown = self._merge_preferences_markdown(global_memory_markdown, memory_markdown)
 
         preference_source = "none"
         active_preferences_markdown = None
@@ -48,16 +53,20 @@ class AlternativesService:
             preference_source = "inline_markdown"
             self.preferences_memory.upsert_category_preferences(user_id, category, active_preferences_markdown)
         elif request.user_message and request.user_message.strip():
-            extracted = self._extract_preferences_from_message(request.user_message)
-            if extracted:
-                active_preferences_markdown = extracted
+            interpreted = await self.preference_interpreter.interpret(
+                category=category,
+                user_message=request.user_message,
+                current_preferences_markdown=merged_memory_markdown,
+            )
+            if interpreted.should_update and interpreted.final_preferences_markdown:
+                active_preferences_markdown = interpreted.final_preferences_markdown
                 preference_source = "user_message_extracted"
                 self.preferences_memory.upsert_category_preferences(user_id, category, active_preferences_markdown)
-            elif memory_markdown and memory_markdown.strip():
-                active_preferences_markdown = memory_markdown.strip()
+            elif merged_memory_markdown and merged_memory_markdown.strip():
+                active_preferences_markdown = merged_memory_markdown.strip()
                 preference_source = "memory_markdown"
-        elif memory_markdown and memory_markdown.strip():
-            active_preferences_markdown = memory_markdown.strip()
+        elif merged_memory_markdown and merged_memory_markdown.strip():
+            active_preferences_markdown = merged_memory_markdown.strip()
             preference_source = "memory_markdown"
 
         candidate_suggestions = list(pipeline_output.rag_suggestions)
@@ -446,50 +455,23 @@ class AlternativesService:
         return value or "mvp-default-user"
 
     @staticmethod
-    def _extract_preferences_from_message(message: str) -> Optional[str]:
-        normalized = (message or "").strip().lower()
-        if not normalized:
-            return None
-
-        bullets: List[str] = []
-        if any(token in normalized for token in ("vegano", "vegan")):
-            bullets.append("- vegan")
-        if any(token in normalized for token in ("vegetar", "vegetarian")):
-            bullets.append("- vegetarian")
-        if any(token in normalized for token in ("lattosio", "lactose", "no dairy", "senza latte")):
-            bullets.append("- no dairy")
-        if any(token in normalized for token in ("glutine", "gluten", "celiac", "celiaco")):
-            bullets.append("- no gluten")
-        if any(token in normalized for token in ("arachidi", "peanut", "frutta a guscio", "nuts")):
-            bullets.append("- no nuts")
-        if any(token in normalized for token in ("pesce", "fish", "seafood")):
-            bullets.append("- no fish")
-        if any(token in normalized for token in ("manzo", "beef")):
-            bullets.append("- no beef")
-        if any(token in normalized for token in ("maiale", "pork")):
-            bullets.append("- no pork")
-        if any(token in normalized for token in ("palma", "palm oil")):
-            bullets.append("- no palm oil")
-        if any(token in normalized for token in ("zucchero", "sugar")):
-            bullets.append("- no sugar")
-        if any(token in normalized for token in ("senza plastica", "plastic free", "plastic-free", "no plastic")):
-            bullets.append("- senza plastica")
-        if any(token in normalized for token in ("solo bio", "biologico", "organic only", "only organic")):
-            bullets.append("- solo bio")
-
-        if not bullets:
-            if any(token in normalized for token in ("nessuna preferenza", "nessuna", "no preference", "no preferences")):
-                return "- nessuna preferenza"
-            return None
-
-        deduped = []
-        seen = set()
-        for bullet in bullets:
-            if bullet in seen:
+    def _merge_preferences_markdown(*blocks: Optional[str]) -> Optional[str]:
+        merged: list[str] = []
+        seen: set[str] = set()
+        for block in blocks:
+            if not block or not block.strip():
                 continue
-            seen.add(bullet)
-            deduped.append(bullet)
-        return "\n".join(deduped)
+            for raw_line in block.splitlines():
+                line = raw_line.strip()
+                if not line:
+                    continue
+                normalized = line if line.startswith("- ") else "- {}".format(line.lstrip("- ").strip())
+                lowered = normalized.lower()
+                if lowered in seen:
+                    continue
+                seen.add(lowered)
+                merged.append(normalized)
+        return "\n".join(merged) if merged else None
 
     @staticmethod
     def _build_assistant_message(

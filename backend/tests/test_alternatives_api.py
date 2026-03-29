@@ -156,6 +156,44 @@ def test_alternatives_endpoint_reuses_memory_after_user_message(api_client, sett
     assert second_payload["needs_preference_input"] is False
 
 
+def test_alternatives_endpoint_updates_existing_memory_with_new_user_preferences(
+    api_client, settings, sample_off_payload
+) -> None:
+    base_barcode = sample_off_payload["product"]["code"]
+    (settings.off_data_dir / "{}.json".format(base_barcode)).write_text(json.dumps(sample_off_payload), encoding="utf-8")
+
+    first = api_client.post(
+        "/alternatives/from-barcode",
+        json={
+            "barcode": base_barcode,
+            "locale": "it-IT",
+            "user_id": "alice",
+            "user_message": "Per i biscotti sono vegana e intollerante al lattosio",
+        },
+    )
+    assert first.status_code == 200
+    assert first.json()["applied_preferences_markdown"] == "- vegan\n- no dairy"
+
+    second = api_client.post(
+        "/alternatives/from-barcode",
+        json={
+            "barcode": base_barcode,
+            "locale": "it-IT",
+            "user_id": "alice",
+            "user_message": "Non sono piu vegana, ma resto intollerante al lattosio",
+        },
+    )
+    assert second.status_code == 200
+    second_payload = second.json()
+    assert second_payload["preference_source"] == "user_message_extracted"
+    assert second_payload["applied_preferences_markdown"] == "- no dairy"
+
+    memory_path = settings.off_data_dir.parent / "data" / "agent_memory" / "alice.md"
+    assert memory_path.exists()
+    assert "- no dairy" in memory_path.read_text(encoding="utf-8")
+    assert "- vegan" not in memory_path.read_text(encoding="utf-8")
+
+
 def test_alternatives_endpoint_supports_product_context_without_barcode(api_client, settings) -> None:
     compatible_candidate = {
         "status": 1,

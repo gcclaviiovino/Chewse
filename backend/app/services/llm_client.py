@@ -146,6 +146,64 @@ class LLMClient:
         )
         return self.parse_json_response(raw, fallback_fields=("accepted_sources",))
 
+    async def interpret_preferences(
+        self,
+        *,
+        prompt: str,
+        category: str,
+        user_message: str,
+        current_preferences_markdown: Optional[str],
+    ) -> Dict[str, Any]:
+        prompt_text = self._render_prompt(
+            prompt,
+            {
+                "category": guard_untrusted_text(category, 200),
+                "user_message": guard_untrusted_text(user_message, self.settings.llm_input_max_chars),
+                "current_preferences_markdown": guard_untrusted_text(
+                    current_preferences_markdown or "(none)",
+                    self.settings.llm_input_max_chars,
+                ),
+            },
+        )
+        raw = await self._chat_completion(
+            messages=[{"role": "user", "content": prompt_text}],
+            thinking=False,
+        )
+        return self.parse_json_response(raw, fallback_fields=("should_update", "final_preferences_markdown"))
+
+    async def run_preferences_chat_turn(
+        self,
+        *,
+        prompt: str,
+        category: str,
+        user_message: str,
+        current_preferences_markdown: Optional[str],
+        chat_history: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
+        prompt_text = self._render_prompt(
+            prompt,
+            {
+                "category": guard_untrusted_text(category, 200),
+                "user_message": guard_untrusted_text(user_message, self.settings.llm_input_max_chars),
+                "current_preferences_markdown": guard_untrusted_text(
+                    current_preferences_markdown or "(none)",
+                    self.settings.llm_input_max_chars,
+                ),
+                "chat_history": guard_untrusted_text(
+                    json.dumps(chat_history[-12:], ensure_ascii=False),
+                    self.settings.llm_input_max_chars,
+                ),
+            },
+        )
+        raw = await self._chat_completion(
+            messages=[{"role": "user", "content": prompt_text}],
+            thinking=False,
+        )
+        return self.parse_json_response(
+            raw,
+            fallback_fields=("assistant_message", "should_update", "final_preferences_markdown", "needs_preference_input"),
+        )
+
     async def _chat_completion(
         self,
         messages: List[Dict[str, Any]],

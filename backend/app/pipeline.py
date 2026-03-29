@@ -13,6 +13,8 @@ from app.services.llm_client import LLMClient
 from app.services.normalizer import ProductNormalizer
 from app.services.openfoodfacts_client import OpenFoodFactsClient
 from app.services.pipeline_orchestrator import PipelineOrchestrator
+from app.services.preference_interpreter import PreferenceInterpreter
+from app.services.preferences_chat_service import PreferencesChatService
 from app.services.preferences_evaluator import PreferencesEvaluator
 from app.services.preferences_memory import PreferencesMemoryService
 from app.services.rag_service import RagService
@@ -42,9 +44,25 @@ async def run_pipeline(input: PipelineInput) -> PipelineOutput:
 def build_alternatives_service() -> AlternativesService:
     settings = get_settings()
     orchestrator = build_orchestrator()
+    llm_client = LLMClient(settings)
+    preference_interpreter = PreferenceInterpreter(
+        llm_client=llm_client,
+        prompt_path=settings.backend_dir / "app" / "prompts" / "manage_preferences.md",
+    )
     return AlternativesService(
         orchestrator=orchestrator,
         preferences_evaluator=PreferencesEvaluator(),
         impact_translator=ImpactTranslator(),
         preferences_memory=PreferencesMemoryService(settings.backend_dir),
+        preference_interpreter=preference_interpreter,
+    )
+
+
+def build_preferences_chat_service() -> PreferencesChatService:
+    settings = get_settings()
+    llm_client = LLMClient(settings)
+    return PreferencesChatService(
+        preferences_memory=PreferencesMemoryService(settings.backend_dir),
+        llm_client=llm_client,
+        prompt_path=settings.backend_dir / "app" / "prompts" / "preferences_chat_turn.md",
     )

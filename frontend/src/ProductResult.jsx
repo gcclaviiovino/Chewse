@@ -109,7 +109,7 @@ const ProductResult = () => {
 
   const handleViewAlternative = () => {
     if (!productData) return
-    navigate('/chat', { state: { product: productData } })
+    navigate('/chat', { state: { mode: 'product', product: productData } })
   }
 
   if (!productData) {
