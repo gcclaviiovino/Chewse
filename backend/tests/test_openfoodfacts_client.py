@@ -179,6 +179,31 @@ def test_off_search_fails_over_to_staging_on_503(monkeypatch, settings) -> None:
     assert calls[1][1]["Authorization"].startswith("Basic ")
 
 
+def test_off_search_expands_canonical_category_aliases(monkeypatch, settings) -> None:
+    client = OpenFoodFactsClient(settings)
+    normalizer = ProductNormalizer()
+    captured_params: list[dict | None] = []
+
+    async def fake_get(self, url, headers=None, params=None):
+        captured_params.append(params)
+        request = httpx.Request("GET", url, headers=headers, params=params)
+        return httpx.Response(200, request=request, json={"products": []})
+
+    monkeypatch.setattr(httpx.AsyncClient, "get", fake_get)
+
+    asyncio.run(
+        client.search_similar_products(
+            product=normalizer.normalize_llm_payload({"product_name": "Cookies", "categories_tags": ["en:biscuit"]}),
+            locale="it-IT",
+            limit=5,
+        )
+    )
+
+    categories = [params.get("categories_tags_en") for params in captured_params if params and params.get("categories_tags_en")]
+    assert "biscuits" in categories
+    assert "cookies" in categories
+
+
 def test_off_client_returns_parse_error_on_malformed_json(monkeypatch, settings) -> None:
     client = OpenFoodFactsClient(settings)
 

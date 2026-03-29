@@ -12,6 +12,7 @@ from app.core.settings import Settings
 from app.core.observability import log_event
 from app.product import model_to_dict
 from app.schemas.pipeline import ProductData, RagSuggestion
+from app.services.category_normalizer import canonicalize_category
 from app.services.embeddings_client import EmbeddingsClient
 from app.services.llm_client import LLMClient
 from app.services.openfoodfacts_client import OpenFoodFactsClient
@@ -601,10 +602,7 @@ class RagService:
 
     @staticmethod
     def _normalize_tag(value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if ":" in normalized:
-            normalized = normalized.split(":", 1)[1]
-        return normalized.replace("_", " ").replace("-", " ").strip()
+        return canonicalize_category(value).replace("-", " ").strip()
 
     @staticmethod
     def _tokenize(value: Optional[str]) -> set[str]:

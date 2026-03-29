@@ -14,6 +14,7 @@ import httpx
 
 from app.core.settings import Settings
 from app.schemas.pipeline import ProductData
+from app.services.category_normalizer import category_search_aliases, humanize_category
 
 OpenFoodFactsStatus = Literal["ok", "not_found", "rate_limited", "error", "parse_error"]
 
@@ -246,62 +247,72 @@ class OpenFoodFactsClient:
         locale: Optional[str] = None,
         limit: Optional[int] = None,
     ) -> list[Dict[str, Any]]:
-        params = self._build_search_query(product, locale=locale, limit=limit)
-        if not params:
+        query_params_list = self._build_search_queries(product, locale=locale, limit=limit)
+        if not query_params_list:
             return []
 
         retry_count = 0
         search_urls = self._candidate_search_urls()
+        merged_results: list[Dict[str, Any]] = []
+        seen_barcodes: set[str] = set()
         async with httpx.AsyncClient(timeout=self._build_timeout()) as client:
-            while True:
-                response = None
-                for url_index, search_url in enumerate(search_urls):
-                    try:
-                        response = await client.get(
-                            search_url,
-                            headers=self._build_headers(base_url=search_url),
-                            params=params,
-                        )
-                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException):
-                        if url_index < len(search_urls) - 1:
+            for params in query_params_list:
+                while True:
+                    response = None
+                    for url_index, search_url in enumerate(search_urls):
+                        try:
+                            response = await client.get(
+                                search_url,
+                                headers=self._build_headers(base_url=search_url),
+                                params=params,
+                            )
+                        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadError, httpx.ReadTimeout, httpx.TimeoutException):
+                            if url_index < len(search_urls) - 1:
+                                continue
+                            if retry_count >= self.settings.off_max_retries:
+                                return merged_results
+                            await self._sleep_before_retry(retry_count)
+                            retry_count += 1
+                            response = None
+                            break
+
+                        if 500 <= response.status_code <= 599 and url_index < len(search_urls) - 1:
                             continue
-                        if retry_count >= self.settings.off_max_retries:
-                            return []
-                        await self._sleep_before_retry(retry_count)
-                        retry_count += 1
-                        response = None
                         break
 
-                    if 500 <= response.status_code <= 599 and url_index < len(search_urls) - 1:
+                    if response is None:
                         continue
+
+                    if response.status_code == 429:
+                        if retry_count >= self.settings.off_max_retries:
+                            return merged_results
+                        await self._sleep_before_retry(retry_count, response=response)
+                        retry_count += 1
+                        continue
+
+                    if 500 <= response.status_code <= 599:
+                        if retry_count >= self.settings.off_max_retries:
+                            return merged_results
+                        await self._sleep_before_retry(retry_count)
+                        retry_count += 1
+                        continue
+
+                    if response.status_code != 200:
+                        break
+
+                    try:
+                        payload = response.json()
+                    except (json.JSONDecodeError, ValueError):
+                        break
+
+                    for item in self._extract_search_products(payload):
+                        barcode = str(item.get("code") or item.get("barcode") or "").strip()
+                        if barcode and barcode not in seen_barcodes:
+                            seen_barcodes.add(barcode)
+                            merged_results.append(item)
                     break
 
-                if response is None:
-                    continue
-
-                if response.status_code == 429:
-                    if retry_count >= self.settings.off_max_retries:
-                        return []
-                    await self._sleep_before_retry(retry_count, response=response)
-                    retry_count += 1
-                    continue
-
-                if 500 <= response.status_code <= 599:
-                    if retry_count >= self.settings.off_max_retries:
-                        return []
-                    await self._sleep_before_retry(retry_count)
-                    retry_count += 1
-                    continue
-
-                if response.status_code != 200:
-                    return []
-
-                try:
-                    payload = response.json()
-                except (json.JSONDecodeError, ValueError):
-                    return []
-
-                return self._extract_search_products(payload)
+        return merged_results
 
     def _build_timeout(self) -> httpx.Timeout:
         return httpx.Timeout(
@@ -375,16 +386,17 @@ class OpenFoodFactsClient:
     def _is_staging_url(base_url: Optional[str]) -> bool:
         return bool(base_url and "world.openfoodfacts.net" in base_url)
 
-    def _build_search_query(
+    def _build_search_queries(
         self,
         product: ProductData,
         *,
         locale: Optional[str],
         limit: Optional[int],
-    ) -> Dict[str, str]:
+    ) -> list[Dict[str, str]]:
         params = self._build_query_params(locale)
         page_size = max(1, limit or self.settings.similar_products_candidate_limit)
-        params.update(
+        base_params = dict(params)
+        base_params.update(
             {
                 "page_size": str(page_size),
                 "fields": ",".join(
@@ -407,14 +419,31 @@ class OpenFoodFactsClient:
             }
         )
 
-        category_names = [self._humanize_tag(tag) for tag in product.categories_tags if self._humanize_tag(tag)]
-        if category_names:
-            params["categories_tags_en"] = category_names[0]
-        else:
-            product_name = (product.product_name or "").strip()
-            if product_name:
-                params["product_name"] = product_name
-        return params
+        queries: list[Dict[str, str]] = []
+        category_names = category_search_aliases(product.categories_tags)
+        for category_name in category_names[:3]:
+            category_params = dict(base_params)
+            category_params["categories_tags_en"] = category_name
+            queries.append(category_params)
+
+        product_name = (product.product_name or "").strip()
+        if product_name:
+            name_params = dict(base_params)
+            name_params["product_name"] = product_name
+            queries.append(name_params)
+
+        if not queries:
+            return []
+
+        deduped: list[Dict[str, str]] = []
+        seen: set[tuple[tuple[str, str], ...]] = set()
+        for query in queries:
+            marker = tuple(sorted(query.items()))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            deduped.append(query)
+        return deduped
 
     @staticmethod
     def _extract_search_products(payload: Any) -> list[Dict[str, Any]]:
@@ -427,11 +456,7 @@ class OpenFoodFactsClient:
 
     @staticmethod
     def _humanize_tag(value: str) -> str:
-        normalized = str(value or "").strip().lower()
-        if ":" in normalized:
-            normalized = normalized.split(":", 1)[1]
-        normalized = normalized.replace("_", " ").replace("-", " ").strip()
-        return normalized
+        return humanize_category(value)
 
     def _result_from_payload(
         self,

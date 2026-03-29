@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Optional
 
+from app.services.category_normalizer import canonicalize_category
+
 
 @dataclass
 class CategoryPreference:
@@ -40,9 +42,7 @@ class PreferencesMemoryService:
 
     @staticmethod
     def _normalize_category(category: str) -> str:
-        normalized = (category or "unknown").strip().lower()
-        normalized = normalized.replace("_", "-")
-        normalized = re.sub(r"\s+", "-", normalized)
+        normalized = canonicalize_category(category)
         return normalized or "unknown"
 
     @staticmethod
