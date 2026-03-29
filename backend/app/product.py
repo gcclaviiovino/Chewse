@@ -36,7 +36,7 @@ def merge_product_data(primary: ProductData, secondary: Optional[ProductData]) -
             merged_payload[field_name] = _merge_data_completeness(current or {}, value or {})
             continue
         if field_name in {"labels_tags", "categories_tags"}:
-            merged_payload[field_name] = sorted(set((current or []) + (value or [])))
+            merged_payload[field_name] = _merge_ordered_list(current or [], value or [])
             continue
         if not current and value:
             merged_payload[field_name] = value
@@ -69,4 +69,16 @@ def _merge_data_completeness(primary: dict, secondary: dict) -> dict:
     merged = dict(secondary)
     for key, value in primary.items():
         merged[key] = bool(value) or bool(merged.get(key))
+    return merged
+
+
+def _merge_ordered_list(primary: list, secondary: list) -> list:
+    merged: list = []
+    seen: set[str] = set()
+    for item in list(primary) + list(secondary):
+        marker = str(item).strip()
+        if not marker or marker in seen:
+            continue
+        seen.add(marker)
+        merged.append(item)
     return merged

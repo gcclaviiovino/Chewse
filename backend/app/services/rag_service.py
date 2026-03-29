@@ -237,15 +237,17 @@ class RagService:
             candidate.embedding_score = embedding_scores[index] if index < len(embedding_scores) else 0.0
             category_score = self._category_similarity(product.categories_tags, candidate.categories_tags)
             ingredient_score = self._ingredient_similarity(product, candidate)
+            characteristic_ingredient_score = self._characteristic_ingredient_similarity(product, candidate)
             name_score = self._name_similarity(product.product_name, candidate.product_name)
             quantity_score = self._quantity_similarity(product.quantity, candidate.quantity)
             packaging_score = self._packaging_similarity(product.packaging, candidate.packaging)
 
             candidate.similarity_score = round(
-                (0.35 * category_score)
-                + (0.2 * ingredient_score)
-                + (0.2 * name_score)
-                + (0.15 * candidate.embedding_score)
+                (0.3 * category_score)
+                + (0.15 * ingredient_score)
+                + (0.2 * characteristic_ingredient_score)
+                + (0.15 * name_score)
+                + (0.1 * candidate.embedding_score)
                 + (0.05 * quantity_score)
                 + (0.05 * packaging_score),
                 4,
@@ -268,6 +270,8 @@ class RagService:
             )
 
             if candidate.similarity_score < similarity_threshold:
+                continue
+            if not self._passes_characteristic_ingredient_gate(product, candidate, category_score, ingredient_score, characteristic_ingredient_score):
                 continue
             if base_score is not None and candidate.ecoscore_score is not None and candidate.ecoscore_score <= base_score:
                 continue
@@ -453,10 +457,71 @@ class RagService:
         return intersection / max(len(base_tokens), len(candidate_tokens), 1)
 
     @staticmethod
+    def _characteristic_ingredient_similarity(product: ProductData, candidate: _Candidate) -> float:
+        base_tokens = RagService._characteristic_ingredient_tokens_from_product(product)
+        candidate_tokens = RagService._ingredient_tokens(candidate.ingredients_text)
+        if not base_tokens or not candidate_tokens:
+            return 0.0
+        intersection = len(base_tokens & candidate_tokens)
+        return intersection / max(len(base_tokens), 1)
+
+    @staticmethod
+    def _passes_characteristic_ingredient_gate(
+        product: ProductData,
+        candidate: _Candidate,
+        category_score: float,
+        ingredient_score: float,
+        characteristic_ingredient_score: float,
+    ) -> bool:
+        base_characteristic_tokens = RagService._characteristic_ingredient_tokens_from_product(product)
+        if len(base_characteristic_tokens) < 2:
+            return True
+        candidate_tokens = RagService._ingredient_tokens(candidate.ingredients_text)
+        if not candidate_tokens:
+            return True
+        if category_score <= 0:
+            return True
+        if characteristic_ingredient_score >= 0.34:
+            return True
+        return ingredient_score >= 0.2
+
+    @staticmethod
     def _ingredient_tokens_from_product(product: ProductData) -> set[str]:
         signal_tokens = {str(item.get("id") or "").strip().lower() for item in product.eco_ingredient_signals if isinstance(item, dict)}
         signal_tokens.discard("")
         return signal_tokens or RagService._ingredient_tokens(product.ingredients_text)
+
+    @staticmethod
+    def _characteristic_ingredient_tokens_from_product(product: ProductData) -> set[str]:
+        signal_tokens = {
+            str(item.get("id") or "").strip().lower()
+            for item in product.eco_ingredient_signals
+            if isinstance(item, dict) and item.get("present") is not False
+        }
+        signal_tokens.discard("")
+        normalized_signals = {
+            token
+            for token in signal_tokens
+            if token not in {"milk", "cream", "butter", "cheese", "beef", "fish"}
+        }
+        if normalized_signals:
+            return normalized_signals
+
+        ingredient_tokens = RagService._ingredient_tokens(product.ingredients_text)
+        generic_tokens = {
+            "sugar",
+            "sale",
+            "salt",
+            "water",
+            "olio",
+            "oil",
+            "flour",
+            "farina",
+        }
+        filtered = {token for token in ingredient_tokens if token not in generic_tokens}
+        if len(filtered) >= 2:
+            return filtered
+        return ingredient_tokens
 
     @staticmethod
     def _ingredient_tokens(value: Optional[str]) -> set[str]:
@@ -465,7 +530,7 @@ class RagService:
         tokens = {
             token
             for token in re.findall(r"[a-zA-Z]{3,}", value.lower())
-            if token not in {"con", "senza", "puo", "pu", "contiene", "tracce"}
+            if token not in {"con", "senza", "puo", "pu", "contiene", "tracce", "ingredienti", "ingredients"}
         }
         return tokens
 

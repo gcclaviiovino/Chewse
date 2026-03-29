@@ -1,7 +1,14 @@
 from __future__ import annotations
 
+from app.product import merge_product_data
 from app.schemas.pipeline import ProductData
-from app.services.category_normalizer import canonicalize_categories, canonicalize_category, category_search_aliases
+from app.services.category_normalizer import (
+    canonicalize_categories,
+    canonicalize_category,
+    category_search_aliases,
+    prioritize_categories,
+    select_primary_category,
+)
 from app.services.preferences_memory import PreferencesMemoryService
 from app.services.rag_service import RagService
 from tests.conftest import FakeEmbeddingsClient, FakeLLMClient
@@ -21,6 +28,11 @@ def test_category_search_aliases_expand_family() -> None:
     assert "cookies" in aliases
 
 
+def test_primary_category_prefers_specific_spreads_over_breakfasts() -> None:
+    assert select_primary_category(["en:breakfasts", "en:spreads"]) == "spreads"
+    assert prioritize_categories(["en:breakfasts", "en:spreads"])[0] == "spreads"
+
+
 def test_preferences_memory_uses_canonical_category_keys(tmp_path) -> None:
     service = PreferencesMemoryService(tmp_path)
 
@@ -35,3 +47,12 @@ def test_rag_category_similarity_uses_canonical_categories(settings) -> None:
     similarity = rag_service._category_similarity(["en:biscuit"], ["en:biscuits"])
 
     assert similarity == 1.0
+
+
+def test_merge_product_data_preserves_primary_category_order() -> None:
+    primary = ProductData(product_name="Crema", categories_tags=["en:spreads", "en:breakfasts"], source="image_llm", confidence=0.4)
+    secondary = ProductData(product_name="Crema", categories_tags=["en:breakfasts", "en:sweet-spreads"], source="openfoodfacts", confidence=0.9)
+
+    merged = merge_product_data(primary, secondary)
+
+    assert merged.categories_tags == ["en:spreads", "en:breakfasts", "en:sweet-spreads"]

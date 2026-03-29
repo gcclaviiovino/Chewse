@@ -13,7 +13,7 @@ from app.schemas.pipeline import (
     ProductData,
     RagSuggestion,
 )
-from app.services.category_normalizer import canonicalize_categories, canonicalize_category
+from app.services.category_normalizer import canonicalize_category, select_primary_category
 from app.services.impact_translator import ImpactTranslator
 from app.services.pipeline_orchestrator import PipelineOrchestrator
 from app.services.preferences_evaluator import PreferencesEvaluator
@@ -430,9 +430,9 @@ class AlternativesService:
 
     @staticmethod
     def _infer_preference_category(product: ProductData) -> str:
-        canonical_categories = canonicalize_categories(product.categories_tags)
-        if canonical_categories:
-            return canonical_categories[0]
+        primary_category = select_primary_category(product.categories_tags)
+        if primary_category:
+            return primary_category
 
         if product.product_name:
             tokens = re.findall(r"[a-zA-Z]+", product.product_name.lower())

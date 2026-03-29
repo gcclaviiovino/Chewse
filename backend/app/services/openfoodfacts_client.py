@@ -14,7 +14,7 @@ import httpx
 
 from app.core.settings import Settings
 from app.schemas.pipeline import ProductData
-from app.services.category_normalizer import category_search_aliases, humanize_category
+from app.services.category_normalizer import aliases_for_category, humanize_category, prioritize_categories
 
 OpenFoodFactsStatus = Literal["ok", "not_found", "rate_limited", "error", "parse_error"]
 
@@ -420,17 +420,25 @@ class OpenFoodFactsClient:
         )
 
         queries: list[Dict[str, str]] = []
-        category_names = category_search_aliases(product.categories_tags)
-        for category_name in category_names[:3]:
-            category_params = dict(base_params)
-            category_params["categories_tags_en"] = category_name
-            queries.append(category_params)
+        prioritized_categories = prioritize_categories(product.categories_tags)
+        for index, category_name in enumerate(prioritized_categories[:2]):
+            alias_limit = 3 if index == 0 else 1
+            for alias in aliases_for_category(category_name)[:alias_limit]:
+                category_params = dict(base_params)
+                category_params["categories_tags_en"] = alias
+                queries.append(category_params)
+
+        if not queries:
+            for category_name in prioritize_categories(product.categories_tags)[:1]:
+                category_params = dict(base_params)
+                category_params["categories_tags_en"] = category_name
+                queries.append(category_params)
 
         product_name = (product.product_name or "").strip()
         if product_name:
-            name_params = dict(base_params)
-            name_params["product_name"] = product_name
-            queries.append(name_params)
+            category_params = dict(base_params)
+            category_params["product_name"] = product_name
+            queries.append(category_params)
 
         if not queries:
             return []
