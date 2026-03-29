@@ -67,6 +67,8 @@ class Settings(BaseModel):
     off_user_agent: str = Field(
         default_factory=lambda: os.getenv("OFF_USER_AGENT", "SocialFoodBackend/1.0 (support@example.com)")
     )
+    off_username: str = Field(default_factory=lambda: os.getenv("OFF_USERNAME", ""))
+    off_password: str = Field(default_factory=lambda: os.getenv("OFF_PASSWORD", ""))
     off_timeout_connect_seconds: float = Field(
         default_factory=lambda: float(
             os.getenv(

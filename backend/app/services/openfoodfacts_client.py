@@ -316,7 +316,13 @@ class OpenFoodFactsClient:
             "User-Agent": self.settings.off_user_agent,
             "Accept": "application/json",
         }
-        if self._is_staging_url(base_url):
+        # Use account credentials if provided, otherwise use staging defaults
+        if self.settings.off_username and self.settings.off_password:
+            credentials = base64.b64encode(
+                f"{self.settings.off_username}:{self.settings.off_password}".encode()
+            ).decode("ascii")
+            headers["Authorization"] = f"Basic {credentials}"
+        elif self._is_staging_url(base_url):
             credentials = base64.b64encode(b"off:off").decode("ascii")
             headers["Authorization"] = "Basic {}".format(credentials)
         return headers
