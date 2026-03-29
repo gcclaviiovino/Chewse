@@ -127,6 +127,25 @@ class LLMClient:
         )
         return self.parse_json_response(raw, fallback_fields=("suggestions",))
 
+    async def filter_candidate_coherence(
+        self,
+        prompt: str,
+        product_payload: Dict[str, Any],
+        retrieved_docs: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        prompt_text = self._render_prompt(
+            prompt,
+            {
+                "product_json": truncate_text(json.dumps(redact_data(product_payload), ensure_ascii=False), self.settings.llm_input_max_chars),
+                "docs_json": truncate_text(json.dumps(redact_data(retrieved_docs), ensure_ascii=False), self.settings.llm_input_max_chars),
+            },
+        )
+        raw = await self._chat_completion(
+            messages=[{"role": "user", "content": prompt_text}],
+            thinking=False,
+        )
+        return self.parse_json_response(raw, fallback_fields=("accepted_sources",))
+
     async def _chat_completion(
         self,
         messages: List[Dict[str, Any]],

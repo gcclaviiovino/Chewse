@@ -115,6 +115,7 @@ class RagService:
 
         shortlist_size = max(1, min(top_k or self.settings.rag_top_k, self.settings.similar_products_shortlist_size))
         shortlist = ranked_candidates[:shortlist_size]
+        shortlist = await self._filter_shortlist_for_substitutability(product, shortlist)
 
         suggestions = await self._rerank_with_llm(product, user_query, shortlist)
         if not suggestions:
@@ -122,6 +123,39 @@ class RagService:
             suggestions = self._fallback_suggestions(product, shortlist)
         trace["suggestion_count"] = len(suggestions)
         return suggestions, trace
+
+    async def _filter_shortlist_for_substitutability(
+        self,
+        product: ProductData,
+        shortlist: List[_Candidate],
+    ) -> List[_Candidate]:
+        if len(shortlist) <= 1:
+            return shortlist
+
+        prompt_path = self.settings.backend_dir / "app" / "prompts" / "filter_alternative_coherence.md"
+        prompt = prompt_path.read_text(encoding="utf-8")
+        retrieved_docs = [self._candidate_to_doc(candidate) for candidate in shortlist]
+
+        try:
+            response = await self.llm_client.filter_candidate_coherence(
+                prompt=prompt,
+                product_payload=model_to_dict(product),
+                retrieved_docs=retrieved_docs,
+            )
+        except Exception as exc:
+            log_event(self.logger, logging.WARNING, "rag_coherence_filter_failed", detail=str(exc))
+            return shortlist
+
+        accepted_sources = {
+            str(source).strip()
+            for source in (response.get("accepted_sources") or [])
+            if str(source).strip()
+        }
+        if not accepted_sources:
+            return shortlist
+
+        filtered = [candidate for candidate in shortlist if candidate.barcode in accepted_sources]
+        return filtered or shortlist
 
     async def _rerank_with_llm(
         self,

@@ -79,6 +79,28 @@ class FakeLLMClient(LLMClient):
             ]
         }
 
+    async def filter_candidate_coherence(
+        self,
+        prompt: str,
+        product_payload: dict,
+        retrieved_docs: list[dict],
+    ) -> dict:
+        base_name = str((product_payload or {}).get("product_name") or "").lower()
+        accepted_sources: list[str] = []
+        rejected_sources: list[dict] = []
+        for doc in retrieved_docs:
+            candidate_name = str((doc.get("metadata") or {}).get("product_name") or "").lower()
+            source_id = str(doc.get("id") or "")
+            if "nutella" in base_name or "crema" in base_name:
+                if any(token in candidate_name for token in ("tomato", "pomodoro", "passata", "puree")):
+                    rejected_sources.append({"source": source_id, "reason": "non e una sostituzione plausibile"})
+                    continue
+            accepted_sources.append(source_id)
+        return {
+            "accepted_sources": accepted_sources,
+            "rejected_sources": rejected_sources,
+        }
+
 
 class FakeEmbeddingsClient(EmbeddingsClient):
     async def embed_text(self, text: str) -> list[float]:
