@@ -13,9 +13,48 @@ def test_preferences_chat_requests_input_when_memory_missing(api_client) -> None
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["preference_source"] == "none"
+    assert payload["preference_source"] == "memory_markdown"
     assert payload["needs_preference_input"] is True
+    assert payload["applied_preferences_markdown"] == "- nessuna preferenza"
     assert "preferenze" in payload["assistant_message"].lower()
+
+
+def test_preferences_chat_creates_memory_file_on_first_open(api_client, settings) -> None:
+    memory_path = settings.off_data_dir.parent / "data" / "agent_memory" / "new-user.md"
+    assert not memory_path.exists()
+
+    response = api_client.post(
+        "/preferences/chat",
+        json={
+            "user_id": "new-user",
+        },
+    )
+
+    assert response.status_code == 200
+    assert memory_path.exists()
+    content = memory_path.read_text(encoding="utf-8")
+    assert "Default preference: nessuna preferenza" in content
+
+
+def test_preferences_chat_can_save_first_category_when_file_was_missing(api_client, settings) -> None:
+    memory_path = settings.off_data_dir.parent / "data" / "agent_memory" / "new-user.md"
+    if memory_path.exists():
+        memory_path.unlink()
+
+    response = api_client.post(
+        "/preferences/chat",
+        json={
+            "user_id": "new-user",
+            "user_message": "Per i biscotti sono vegana",
+            "chat_history": [],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["preference_source"] == "user_message_extracted"
+    assert "## category: biscuits" in payload["applied_preferences_markdown"]
+    assert "- vegan" in payload["applied_preferences_markdown"]
 
 
 def test_preferences_chat_saves_global_preferences(api_client, settings) -> None:

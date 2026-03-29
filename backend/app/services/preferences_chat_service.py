@@ -38,23 +38,25 @@ class PreferencesChatService:
 
     async def handle_chat(self, request: PreferencesChatRequest) -> PreferencesChatResponse:
         user_id = (request.user_id or "").strip() or "mvp-default-user"
+        self.preferences_memory.ensure_memory_file(user_id)
         current_sections = self.preferences_memory.load_all_preferences(user_id)
         current_memory_document = self.preferences_memory.render_memory_document(user_id)
+        current_memory_display = current_memory_document.strip() if current_memory_document and current_memory_document.strip() else "- nessuna preferenza"
         user_message = (request.user_message or "").strip()
 
         if not user_message:
-            if current_memory_document and current_memory_document.strip():
+            if current_sections:
                 return PreferencesChatResponse(
                     preference_source="memory_markdown",
                     preference_category=None,
-                    applied_preferences_markdown=current_memory_document.strip(),
+                    applied_preferences_markdown=current_memory_display,
                     needs_preference_input=False,
                     assistant_message="Questa e la memoria preferenze salvata al momento. Se vuoi, posso aggiornarla direttamente in chat.",
                 )
             return PreferencesChatResponse(
-                preference_source="none",
+                preference_source="memory_markdown",
                 preference_category=None,
-                applied_preferences_markdown=None,
+                applied_preferences_markdown=current_memory_display,
                 needs_preference_input=True,
                 assistant_message=(
                     "Dimmi le tue preferenze e, se possibile, per quale categoria valgono. "
@@ -66,18 +68,19 @@ class PreferencesChatService:
             prompt=self.prompt_template,
             category="full_memory_document",
             user_message=user_message,
-            current_preferences_markdown=current_memory_document,
+            current_preferences_markdown=current_memory_document or current_memory_display,
             chat_history=request.chat_history,
         )
         assistant_message = str(payload.get("assistant_message") or "").strip()
         needs_preference_input = bool(payload.get("needs_preference_input"))
-        preference_source = "memory_markdown" if current_memory_document and current_memory_document.strip() else "none"
+        preference_source = "memory_markdown"
 
         final_memory_document = self._normalize_memory_document(payload.get("final_preferences_markdown"))
         if bool(payload.get("should_update")) and final_memory_document:
-            if self._has_clear_category_reference(user_message, current_sections):
+            if self._can_apply_update(user_message, current_sections, final_memory_document):
                 self.preferences_memory.replace_memory_document(user_id, final_memory_document)
                 current_memory_document = self.preferences_memory.render_memory_document(user_id)
+                current_memory_display = current_memory_document.strip() if current_memory_document and current_memory_document.strip() else "- nessuna preferenza"
                 preference_source = "user_message_extracted"
                 needs_preference_input = False
             else:
@@ -96,7 +99,7 @@ class PreferencesChatService:
         return PreferencesChatResponse(
             preference_source=preference_source,
             preference_category=None,
-            applied_preferences_markdown=current_memory_document.strip() if current_memory_document and current_memory_document.strip() else None,
+            applied_preferences_markdown=current_memory_display,
             needs_preference_input=needs_preference_input,
             assistant_message=assistant_message,
         )
@@ -120,3 +123,13 @@ class PreferencesChatService:
                 if alias and alias in normalized:
                     return True
         return False
+
+    def _can_apply_update(self, user_message: str, current_sections: dict[str, str], final_memory_document: str) -> bool:
+        final_sections = self.preferences_memory.parse_memory_document(final_memory_document)
+        if not final_sections:
+            return False
+        if "generic" in final_sections or "unknown" in final_sections:
+            return False
+        if current_sections:
+            return self._has_clear_category_reference(user_message, current_sections)
+        return self._has_clear_category_reference(user_message, final_sections)

@@ -19,6 +19,7 @@ class PreferencesMemoryService:
     """Simple markdown-based preference memory for MVP usage."""
 
     _SECTION_PATTERN = re.compile(r"^##\s*category:\s*(.+?)\s*$", re.IGNORECASE)
+    _DEFAULT_NOTE = "Default preference: nessuna preferenza"
 
     def __init__(self, backend_dir: Path) -> None:
         self.base_dir = backend_dir / "data" / "agent_memory"
@@ -34,6 +35,24 @@ class PreferencesMemoryService:
     def render_memory_document(self, user_id: str) -> Optional[str]:
         sections = self.load_all_preferences(user_id)
         return self._render_sections_document(sections)
+
+    def has_memory_file(self, user_id: str) -> bool:
+        return self._memory_path(user_id).exists() or self._nested_memory_path(user_id).exists()
+
+    def ensure_memory_file(self, user_id: str) -> None:
+        primary_path = self._memory_path(user_id)
+        if primary_path.exists():
+            return
+
+        nested_path = self._nested_memory_path(user_id)
+        if nested_path.exists():
+            sections = self._read_sections_from_path(nested_path)
+            if sections:
+                self._write_sections(user_id, sections)
+                return
+
+        primary_path.parent.mkdir(parents=True, exist_ok=True)
+        primary_path.write_text(self._render_sections_file({}, include_default_note=True), encoding="utf-8")
 
     def upsert_category_preferences(self, user_id: str, category: str, markdown_block: str) -> None:
         if not markdown_block or not markdown_block.strip():
@@ -54,6 +73,9 @@ class PreferencesMemoryService:
     def replace_memory_document(self, user_id: str, memory_document: str) -> None:
         sections = self._read_sections_from_text(memory_document)
         self._write_sections(user_id, sections)
+
+    def parse_memory_document(self, memory_document: str) -> Dict[str, str]:
+        return self._read_sections_from_text(memory_document)
 
     def has_category_preferences(self, user_id: str, category: str) -> bool:
         data = self.load_category_preferences(user_id, category)
@@ -146,10 +168,13 @@ class PreferencesMemoryService:
         return rendered or None
 
     @classmethod
-    def _render_sections_file(cls, sections: Dict[str, str]) -> str:
+    def _render_sections_file(cls, sections: Dict[str, str], include_default_note: bool = False) -> str:
         lines: list[str] = ["# User preferences memory", ""]
         lines.append("Last updated: {}".format(datetime.now(timezone.utc).isoformat()))
         lines.append("")
+        if include_default_note and not sections:
+            lines.append(cls._DEFAULT_NOTE)
+            lines.append("")
 
         for key in sorted(sections.keys()):
             value = (sections[key] or "").strip()
