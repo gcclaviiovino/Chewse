@@ -52,6 +52,10 @@ const CameraCapture = () => {
     }
   }, [webcamRef, navigate, apiBaseUrl, isUploading])
 
+  const videoConstraints = {
+  facingMode: { ideal: "environment" }
+}
+
   return (
     <main className="min-h-screen bg-gray-50 p-4 sm:p-8">
       <div className="mx-auto max-w-lg">
@@ -72,6 +76,7 @@ const CameraCapture = () => {
             audio={false}
             ref={webcamRef}
             screenshotFormat="image/jpeg"
+            videoConstraints={videoConstraints}
             className="w-full"
           />
         </div>
