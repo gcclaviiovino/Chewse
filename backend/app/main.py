@@ -229,8 +229,14 @@ async def handle_unexpected_error(request: Request, exc: Exception) -> JSONRespo
     )
 
 
+# Lightweight - on railway start
 @app.get("/health")
-async def health() -> dict:
+async def health():
+    return {"status": "ok"}
+
+# Deep check - manually done after start
+@app.get("/health/full")
+async def health_full() -> dict:
     orchestrator = build_orchestrator()
     llm_status = await orchestrator.extractor.llm_client.healthcheck()
     embeddings_status = await orchestrator.rag_service.embeddings_client.healthcheck()
@@ -238,7 +244,6 @@ async def health() -> dict:
     off_status = await orchestrator.off_client.healthcheck()
     return {
         "status": "ok",
-        "trace_id": get_trace_id(),
         "services": {
             "llm": llm_status,
             "embeddings": embeddings_status,
