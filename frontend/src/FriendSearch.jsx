@@ -15,13 +15,14 @@ const FriendSearch = () => {
     setMessage('')
 
     try {
-      const response = await fetch('http://localhost:8000/api/add-friend', {
+      const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000'
+      const response = await fetch(`${API_BASE}/api/add-friend`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          current_user: 'alice123', // Usually comes from your Auth context
-          friend_username: username
-        })
+          current_user: 'alice123',
+          friend_username: username,
+        }),
       })
 
       const data = await response.json()
