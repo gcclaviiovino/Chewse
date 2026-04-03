@@ -53,7 +53,11 @@ const CameraCapture = () => {
   }, [webcamRef, navigate, apiBaseUrl, isUploading])
 
   const videoConstraints = {
-  facingMode: { ideal: "environment" }
+  facingMode: { ideal: "environment" },
+  focusMode: { ideal: "continuous" },
+  focusDistance: { ideal: 0.3, max: 0.5 },
+  width: { ideal: 1920 },
+  height: { ideal: 1080 },
 }
 
   return (
@@ -78,6 +82,8 @@ const CameraCapture = () => {
             screenshotFormat="image/jpeg"
             videoConstraints={videoConstraints}
             className="w-full"
+            imageSmoothing={false}
+            screenshotQuality={0.95}
           />
         </div>
 
