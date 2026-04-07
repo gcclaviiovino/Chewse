@@ -350,27 +350,33 @@ class AlternativesService:
         return [item[2] for item in ranked_fallbacks[:limit]]
 
     async def _build_pipeline_output(self, request: AlternativesRequest):
+        context_product = self._build_context_product(request)
+
         if request.barcode and request.barcode.strip():
-            return await self.orchestrator.run_pipeline(
+            pipeline_output = await self.orchestrator.run_pipeline(
                 PipelineInput(
                     barcode=request.barcode.strip(),
                     locale=request.locale,
                     user_query=request.user_query or "alternativa piu sostenibile",
                 )
             )
+            # If barcode lookup degrades and RAG returns no candidates, reuse frontend context
+            # (name/category/ingredients) instead of forcing an unknown-product ranking path.
+            if context_product is not None and not pipeline_output.rag_suggestions:
+                rag_suggestions, _trace = await self.orchestrator.rag_service.suggest_with_trace(
+                    product=context_product,
+                    user_query=request.user_query or context_product.product_name or "alternativa piu sostenibile",
+                )
+                return SimpleNamespace(
+                    trace_id=pipeline_output.trace_id,
+                    product=context_product,
+                    rag_suggestions=rag_suggestions,
+                )
+            return pipeline_output
 
-        base_product = ProductData(
-            product_name=(request.product_name or "").strip() or None,
-            brand=(request.brand or "").strip() or None,
-            ingredients_text=(request.ingredients_text or "").strip() or None,
-            packaging=(request.packaging or "").strip() or None,
-            origins=(request.origins or "").strip() or None,
-            labels_tags=request.labels_tags,
-            categories_tags=request.categories_tags,
-            quantity=(request.quantity or "").strip() or None,
-            source="image_llm",
-            confidence=0.4,
-        )
+        base_product = context_product
+        if base_product is None:
+            base_product = ProductData(source="unknown", confidence=0.0)
         if not (base_product.product_name or base_product.categories_tags):
             raise AppError(
                 "missing_alternatives_context",
@@ -386,6 +392,32 @@ class AlternativesService:
             trace_id=None,
             product=base_product,
             rag_suggestions=rag_suggestions,
+        )
+
+    @staticmethod
+    def _build_context_product(request: AlternativesRequest) -> Optional[ProductData]:
+        product_name = (request.product_name or "").strip() or None
+        brand = (request.brand or "").strip() or None
+        ingredients_text = (request.ingredients_text or "").strip() or None
+        packaging = (request.packaging or "").strip() or None
+        origins = (request.origins or "").strip() or None
+        quantity = (request.quantity or "").strip() or None
+
+        if not any([product_name, brand, ingredients_text, packaging, origins, quantity, request.labels_tags, request.categories_tags]):
+            return None
+
+        return ProductData(
+            product_name=product_name,
+            brand=brand,
+            barcode=(request.barcode or "").strip() or None,
+            ingredients_text=ingredients_text,
+            packaging=packaging,
+            origins=origins,
+            labels_tags=request.labels_tags,
+            categories_tags=request.categories_tags,
+            quantity=quantity,
+            source="image_llm",
+            confidence=0.4,
         )
 
     def _evaluate_candidates(
